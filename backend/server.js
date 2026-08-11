@@ -15,6 +15,8 @@ app.use(express.json());
 const authRoutes = require('./routes/auth');
 app.use('/api/auth', authRoutes);
 const authMiddleware = require('./middleware/authMiddleware');
+const meetingRoutes = require('./routes/meetings');
+app.use('/api/meetings', meetingRoutes);
 
 app.get('/api/protected-test', authMiddleware, (req, res) => {
   res.json({ message: 'You are authenticated!', user: req.user });
