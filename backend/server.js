@@ -12,6 +12,13 @@ const server = http.createServer(app);
 // Middleware
 app.use(cors());
 app.use(express.json());
+const authRoutes = require('./routes/auth');
+app.use('/api/auth', authRoutes);
+const authMiddleware = require('./middleware/authMiddleware');
+
+app.get('/api/protected-test', authMiddleware, (req, res) => {
+  res.json({ message: 'You are authenticated!', user: req.user });
+});
 
 // Socket.IO
 const io = new Server(server, {
@@ -27,6 +34,7 @@ app.get("/", (req, res) => {
         message: "ISL Communication Backend is running!"
     });
 });
+
 
 // Socket connection
 io.on("connection", (socket) => {
