@@ -59,6 +59,26 @@ io.on("connection", (socket) => {
             userName: userName || "Anonymous"
         });
     });
+    // WebRTC signaling: relay offer to others in the room
+    socket.on("webrtc-offer", ({ offer }) => {
+        const { meetingCode } = socket.data;
+        if (!meetingCode) return;
+        socket.to(meetingCode).emit("webrtc-offer", { offer, from: socket.id });
+    });
+
+    // WebRTC signaling: relay answer back to the offerer
+    socket.on("webrtc-answer", ({ answer, to }) => {
+        io.to(to).emit("webrtc-answer", { answer, from: socket.id });
+    });
+
+    // WebRTC signaling: relay ICE candidates
+    socket.on("webrtc-ice-candidate", ({ candidate, to }) => {
+        if (to) {
+            io.to(to).emit("webrtc-ice-candidate", { candidate, from: socket.id });
+        } else {
+            socket.to(socket.data.meetingCode).emit("webrtc-ice-candidate", { candidate, from: socket.id });
+        }
+    });
 
     // Chat / subtitle message broadcast
     socket.on("send-message", (data) => {

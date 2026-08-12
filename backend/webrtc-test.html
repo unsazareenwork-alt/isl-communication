@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>WebRTC Full Flow Test</title>
+</head>
+<body>
+  <h2>Full Flow Test: Login → Meeting → Video Call</h2>
+
+  <h3>Step 1: Login</h3>
+  <input id="email" placeholder="Email" value="unsazareenwork+test1@gmail.com" />
+  <input id="password" type="password" placeholder="Password" value="Test1234!" />
+  <button onclick="login()">Login</button>
+  <div id="loginStatus"></div>
+
+  <h3>Step 2: Create or Join Meeting</h3>
+  <button onclick="createMeeting()">Create New Meeting</button>
+  <input id="joinCode" placeholder="Meeting code to join" />
+  <button onclick="joinMeetingRest()">Join Existing Meeting</button>
+  <div id="meetingStatus"></div>
+
+  <h3>Step 3: Video Call</h3>
+  <button onclick="connectSocket()">Connect to Room</button>
+  <button onclick="startCall()">Start Call</button>
+
+  <br /><br />
+  <video id="localVideo" autoplay playsinline muted width="300" style="border:1px solid black;"></video>
+  <video id="remoteVideo" autoplay playsinline width="300" style="border:1px solid black;"></video>
+
+  <h3>Log:</h3>
+  <div id="log" style="border:1px solid #ccc; padding:10px; height:250px; overflow-y:auto;"></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const API_BASE = "http://localhost:5000/api";
+    const log = (msg) => {
+      document.getElementById("log").innerHTML += `<div>${msg}</div>`;
+    };
+
+    let accessToken = null;
+    let currentUserName = null;
+    let currentMeetingCode = null;
+    let socket = null;
+    let localStream;
+    let peerConnection;
+    let remoteSocketId = null;
+
+    const configuration = {
+      iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+    };
+
+    // ---- Step 1: Login ----
+    async function login() {
+      const email = document.getElementById("email").value;
+      const password = document.getElementById("password").value;
+
+      const res = await fetch(`${API_BASE}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password })
+      });
+      const data = await res.json();
+
+      if (res.ok) {
+        accessToken = data.session.access_token;
+        currentUserName = data.user.user_metadata?.name || email;
+        document.getElementById("loginStatus").innerText = `✅ Logged in as ${currentUserName}`;
+        log(`Logged in as ${currentUserName}`);
+      } else {
+        document.getElementById("loginStatus").innerText = `❌ ${data.error}`;
+        log(`Login failed: ${data.error}`);
+      }
+    }
+
+    // ---- Step 2: Create meeting ----
+    async function createMeeting() {
+      if (!accessToken) return log("⚠️ Login first.");
+
+      const res = await fetch(`${API_BASE}/meetings/create`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${accessToken}`
+        }
+      });
+      const data = await res.json();
+
+      if (res.ok) {
+        currentMeetingCode = data.meeting.meeting_code;
+        document.getElementById("meetingStatus").innerText = `✅ Meeting created: ${currentMeetingCode}`;
+        log(`Meeting created: ${currentMeetingCode}`);
+      } else {
+        log(`Create meeting failed: ${data.error}`);
+      }
+    }
+
+    // ---- Step 2 alt: Join meeting ----
+    async function joinMeetingRest() {
+      if (!accessToken) return log("⚠️ Login first.");
+      const code = document.getElementById("joinCode").value;
+
+      const res = await fetch(`${API_BASE}/meetings/join/${code}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${accessToken}`
+        }
+      });
+      const data = await res.json();
+
+      if (res.ok) {
+        currentMeetingCode = data.meeting.meeting_code;
+        document.getElementById("meetingStatus").innerText = `✅ Joined meeting: ${currentMeetingCode}`;
+        log(`Joined meeting: ${currentMeetingCode}`);
+      } else {
+        log(`Join meeting failed: ${data.error}`);
+      }
+    }
+
+    // ---- Step 3: Connect socket + video ----
+    async function connectSocket() {
+      if (!currentMeetingCode) return log("⚠️ Create or join a meeting first.");
+
+      socket = io("http://localhost:5000");
+
+      socket.on("connect", async () => {
+        log("✅ Socket connected: " + socket.id);
+
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        document.getElementById("localVideo").srcObject = localStream;
+
+        socket.emit("join-meeting", { meetingCode: currentMeetingCode, userName: currentUserName });
+        log(`Joined room: ${currentMeetingCode}`);
+      });
+
+      socket.on("user-joined", (data) => {
+        log(`👋 ${data.userName} joined (id: ${data.socketId})`);
+        remoteSocketId = data.socketId;
+      });
+
+      socket.on("webrtc-offer", async ({ offer, from }) => {
+        remoteSocketId = from;
+        createPeerConnection();
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+        socket.emit("webrtc-answer", { answer, to: from });
+        log("📞 Incoming call answered.");
+      });
+
+      socket.on("webrtc-answer", async ({ answer }) => {
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+        log("✅ Call connected.");
+      });
+
+      socket.on("webrtc-ice-candidate", async ({ candidate }) => {
+        try {
+          await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (err) {
+          log("ICE error: " + err.message);
+        }
+      });
+    }
+
+    function createPeerConnection() {
+      peerConnection = new RTCPeerConnection(configuration);
+
+      localStream.getTracks().forEach(track => {
+        peerConnection.addTrack(track, localStream);
+      });
+
+      peerConnection.ontrack = (event) => {
+        document.getElementById("remoteVideo").srcObject = event.streams[0];
+        log("🎥 Remote video connected!");
+      };
+
+      peerConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+          socket.emit("webrtc-ice-candidate", { candidate: event.candidate, to: remoteSocketId });
+        }
+      };
+    }
+
+    async function startCall() {
+      if (!remoteSocketId) return log("⚠️ No one else has joined yet.");
+      createPeerConnection();
+      const offer = await peerConnection.createOffer();
+      await peerConnection.setLocalDescription(offer);
+      socket.emit("webrtc-offer", { offer });
+      log("📞 Calling...");
+    }
+  </script>
+</body>
+</html>
