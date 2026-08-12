@@ -17,6 +17,9 @@ app.use('/api/auth', authRoutes);
 const authMiddleware = require('./middleware/authMiddleware');
 const meetingRoutes = require('./routes/meetings');
 app.use('/api/meetings', meetingRoutes);
+const messageRoutes = require('./routes/messages');
+app.use('/api/messages', messageRoutes);
+app.use(express.static(__dirname));
 
 app.get('/api/protected-test', authMiddleware, (req, res) => {
   res.json({ message: 'You are authenticated!', user: req.user });
@@ -42,8 +45,40 @@ app.get("/", (req, res) => {
 io.on("connection", (socket) => {
     console.log("User connected:", socket.id);
 
+    // Join a meeting room
+    socket.on("join-meeting", ({ meetingCode, userName }) => {
+        socket.join(meetingCode);
+        socket.data.meetingCode = meetingCode;
+        socket.data.userName = userName;
+
+        console.log(`${userName || socket.id} joined meeting ${meetingCode}`);
+
+        // Notify others in the room that someone joined
+        socket.to(meetingCode).emit("user-joined", {
+            socketId: socket.id,
+            userName: userName || "Anonymous"
+        });
+    });
+
+    // Chat / subtitle message broadcast
+    socket.on("send-message", (data) => {
+        const { meetingCode } = socket.data;
+        if (!meetingCode) return;
+
+        // Broadcast to everyone else in the room (not back to sender)
+        socket.to(meetingCode).emit("receive-message", data);
+    });
+
     socket.on("disconnect", () => {
+        const { meetingCode, userName } = socket.data;
         console.log("User disconnected:", socket.id);
+
+        if (meetingCode) {
+            socket.to(meetingCode).emit("user-left", {
+                socketId: socket.id,
+                userName: userName || "Anonymous"
+            });
+        }
     });
 });
 

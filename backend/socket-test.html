@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Socket.IO Test</title>
+</head>
+<body>
+  <h2>Socket.IO Test Client</h2>
+  <input id="meetingCode" placeholder="Meeting code" value="test-room-1" />
+  <input id="userName" placeholder="Your name" value="User1" />
+  <button onclick="joinMeeting()">Join Meeting</button>
+  <br /><br />
+  <input id="messageInput" placeholder="Type a message" />
+  <button onclick="sendMessage()">Send</button>
+
+  <h3>Log:</h3>
+  <div id="log" style="border:1px solid #ccc; padding:10px; height:300px; overflow-y:auto;"></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const socket = io("http://localhost:5000");
+    const log = (msg) => {
+      document.getElementById("log").innerHTML += `<div>${msg}</div>`;
+    };
+
+    socket.on("connect", () => log("✅ Connected: " + socket.id));
+
+    socket.on("user-joined", (data) => {
+      log(`👋 ${data.userName} joined the meeting`);
+    });
+
+    socket.on("user-left", (data) => {
+      log(`🚪 ${data.userName} left the meeting`);
+    });
+
+    socket.on("receive-message", (data) => {
+      log(`💬 ${data.userName}: ${data.text}`);
+    });
+
+    function joinMeeting() {
+      const meetingCode = document.getElementById("meetingCode").value;
+      const userName = document.getElementById("userName").value;
+      socket.emit("join-meeting", { meetingCode, userName });
+      log(`Joining meeting: ${meetingCode} as ${userName}`);
+    }
+
+    function sendMessage() {
+      const text = document.getElementById("messageInput").value;
+      const userName = document.getElementById("userName").value;
+      socket.emit("send-message", { text, userName });
+      log(`(sent) ${userName}: ${text}`);
+      document.getElementById("messageInput").value = "";
+    }
+  </script>
+</body>
+</html>
