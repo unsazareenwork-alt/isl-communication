@@ -2,126 +2,76 @@ const express = require('express');
 const router = express.Router();
 const supabase = require('../supabaseClient');
 const authMiddleware = require('../middleware/authMiddleware');
-const { customAlphabet } = require('nanoid');
+const { isValidUUID, isNonEmptyString } = require('../utils/validate');
 
-const generateCode = customAlphabet('abcdefghijklmnopqrstuvwxyz0123456789', 4);
+const VALID_MESSAGE_TYPES = ['chat', 'sign_translation', 'speech_translation'];
 
-function makeMeetingCode() {
-  return `${generateCode()}-${generateCode()}-${generateCode()}`;
-}
+// POST /api/messages
+router.post('/', authMiddleware, async (req, res) => {
+  const senderId = req.user.id;
+  const { meeting_id, message_type, original_text, translated_text, language } = req.body;
 
-// POST /api/meetings/create
-router.post('/create', authMiddleware, async (req, res) => {
-  const hostId = req.user.id;
-  const meetingCode = makeMeetingCode();
-
-  const { data: meeting, error: meetingError } = await supabase
-    .from('meetings')
-    .insert([{ host_id: hostId, meeting_code: meetingCode, status: 'active' }])
-    .select()
-    .single();
-
-  if (meetingError) {
-    return res.status(400).json({ error: meetingError.message });
+  if (!isValidUUID(meeting_id)) {
+    return res.status(400).json({ error: 'meeting_id must be a valid UUID' });
   }
 
-  // Auto-add the host as a participant
-  const { error: participantError } = await supabase
-    .from('meeting_participants')
-    .insert([{ meeting_id: meeting.id, user_id: hostId }]);
-
-  if (participantError) {
-    return res.status(400).json({ error: participantError.message });
+  if (!VALID_MESSAGE_TYPES.includes(message_type)) {
+    return res.status(400).json({ error: `message_type must be one of: ${VALID_MESSAGE_TYPES.join(', ')}` });
   }
 
-  res.status(201).json({ message: 'Meeting created', meeting });
-});
-
-// POST /api/meetings/join/:code
-router.post('/join/:code', authMiddleware, async (req, res) => {
-  const userId = req.user.id;
-  const { code } = req.params;
-
-  const { data: meeting, error: meetingError } = await supabase
-    .from('meetings')
-    .select('*')
-    .eq('meeting_code', code)
-    .eq('status', 'active')
-    .single();
-
-  if (meetingError || !meeting) {
-    return res.status(404).json({ error: 'Meeting not found or not active' });
+  if (!isNonEmptyString(original_text)) {
+    return res.status(400).json({ error: 'original_text is required and must be non-empty text' });
   }
 
-  const { data: participant, error: joinError } = await supabase
-    .from('meeting_participants')
-    .insert([{ meeting_id: meeting.id, user_id: userId }])
-    .select()
-    .single();
-
-  if (joinError) {
-    return res.status(400).json({ error: joinError.message });
+  if (translated_text !== undefined && translated_text !== null && !isNonEmptyString(translated_text)) {
+    return res.status(400).json({ error: 'translated_text must be non-empty text if provided' });
   }
 
-  res.status(200).json({ message: 'Joined meeting', meeting, participant });
-});
-
-// POST /api/meetings/leave/:id
-router.post('/leave/:id', authMiddleware, async (req, res) => {
-  const { id } = req.params; // this is the meeting_id
-  const userId = req.user.id;
+  if (language !== undefined && (typeof language !== 'string' || language.length > 10)) {
+    return res.status(400).json({ error: 'language must be a short language code (e.g. "en", "hi")' });
+  }
 
   const { data, error } = await supabase
-    .from('meeting_participants')
-    .update({ left_at: new Date().toISOString() })
-    .eq('meeting_id', id)
-    .eq('user_id', userId)
-    .is('left_at', null) // only update if they haven't already left
+    .from('messages')
+    .insert([{
+      meeting_id,
+      sender_id: senderId,
+      message_type,
+      original_text,
+      translated_text: translated_text || null,
+      language: language || 'en'
+    }])
     .select()
     .single();
 
   if (error) {
-    return res.status(400).json({ error: error.message });
+    console.error('Insert message error:', error.message);
+    return res.status(500).json({ error: 'Failed to save message. Please try again.' });
   }
 
-  if (!data) {
-    return res.status(404).json({ error: 'No active participation found for this user in this meeting' });
-  }
-
-  res.status(200).json({ message: 'Left meeting', participant: data });
+  res.status(201).json({ message: 'Message saved', data });
 });
 
-// POST /api/meetings/end/:id
-router.post('/end/:id', authMiddleware, async (req, res) => {
-  const { id } = req.params;
-  const userId = req.user.id;
+// GET /api/messages/:meetingId
+router.get('/:meetingId', authMiddleware, async (req, res) => {
+  const { meetingId } = req.params;
 
-  const { data: meeting, error: fetchError } = await supabase
-    .from('meetings')
-    .select('*')
-    .eq('id', id)
-    .single();
-
-  if (fetchError || !meeting) {
-    return res.status(404).json({ error: 'Meeting not found' });
-  }
-
-  if (meeting.host_id !== userId) {
-    return res.status(403).json({ error: 'Only the host can end this meeting' });
+  if (!isValidUUID(meetingId)) {
+    return res.status(400).json({ error: 'meetingId must be a valid UUID' });
   }
 
   const { data, error } = await supabase
-    .from('meetings')
-    .update({ status: 'ended', ended_at: new Date().toISOString() })
-    .eq('id', id)
-    .select()
-    .single();
+    .from('messages')
+    .select('*')
+    .eq('meeting_id', meetingId)
+    .order('created_at', { ascending: true });
 
   if (error) {
-    return res.status(400).json({ error: error.message });
+    console.error('Fetch messages error:', error.message);
+    return res.status(500).json({ error: 'Failed to fetch messages. Please try again.' });
   }
 
-  res.status(200).json({ message: 'Meeting ended', meeting: data });
+  res.status(200).json({ messages: data });
 });
 
 module.exports = router;

@@ -3,6 +3,7 @@ const router = express.Router();
 const supabase = require('../supabaseClient');
 const authMiddleware = require('../middleware/authMiddleware');
 const { customAlphabet } = require('nanoid');
+const { isValidUUID } = require('../utils/validate');
 
 const generateCode = customAlphabet('abcdefghijklmnopqrstuvwxyz0123456789', 4);
 
@@ -22,16 +23,17 @@ router.post('/create', authMiddleware, async (req, res) => {
     .single();
 
   if (meetingError) {
-    return res.status(400).json({ error: meetingError.message });
+    console.error('Create meeting error:', meetingError.message);
+    return res.status(500).json({ error: 'Failed to create meeting. Please try again.' });
   }
 
-  // Auto-add the host as a participant
   const { error: participantError } = await supabase
     .from('meeting_participants')
     .insert([{ meeting_id: meeting.id, user_id: hostId }]);
 
   if (participantError) {
-    return res.status(400).json({ error: participantError.message });
+    console.error('Auto-join host error:', participantError.message);
+    return res.status(500).json({ error: 'Meeting created but failed to register host as participant.' });
   }
 
   res.status(201).json({ message: 'Meeting created', meeting });
@@ -41,6 +43,10 @@ router.post('/create', authMiddleware, async (req, res) => {
 router.post('/join/:code', authMiddleware, async (req, res) => {
   const userId = req.user.id;
   const { code } = req.params;
+
+  if (typeof code !== 'string' || code.length < 3 || code.length > 50) {
+    return res.status(400).json({ error: 'Invalid meeting code' });
+  }
 
   const { data: meeting, error: meetingError } = await supabase
     .from('meetings')
@@ -60,7 +66,8 @@ router.post('/join/:code', authMiddleware, async (req, res) => {
     .single();
 
   if (joinError) {
-    return res.status(400).json({ error: joinError.message });
+    console.error('Join meeting error:', joinError.message);
+    return res.status(500).json({ error: 'Failed to join meeting. Please try again.' });
   }
 
   res.status(200).json({ message: 'Joined meeting', meeting, participant });
@@ -68,8 +75,12 @@ router.post('/join/:code', authMiddleware, async (req, res) => {
 
 // POST /api/meetings/leave/:id
 router.post('/leave/:id', authMiddleware, async (req, res) => {
-  const { id } = req.params; // this is the meeting_id
+  const { id } = req.params;
   const userId = req.user.id;
+
+  if (!isValidUUID(id)) {
+    return res.status(400).json({ error: 'id must be a valid meeting UUID' });
+  }
 
   const { data, error } = await supabase
     .from('meeting_participants')
@@ -81,7 +92,8 @@ router.post('/leave/:id', authMiddleware, async (req, res) => {
     .single();
 
   if (error) {
-    return res.status(400).json({ error: error.message });
+    console.error('Leave meeting error:', error.message);
+    return res.status(500).json({ error: 'Failed to update leave status. Please try again.' });
   }
 
   if (!data) {
@@ -95,6 +107,10 @@ router.post('/leave/:id', authMiddleware, async (req, res) => {
 router.post('/end/:id', authMiddleware, async (req, res) => {
   const { id } = req.params;
   const userId = req.user.id;
+
+  if (!isValidUUID(id)) {
+    return res.status(400).json({ error: 'id must be a valid meeting UUID' });
+  }
 
   const { data: meeting, error: fetchError } = await supabase
     .from('meetings')
@@ -118,7 +134,8 @@ router.post('/end/:id', authMiddleware, async (req, res) => {
     .single();
 
   if (error) {
-    return res.status(400).json({ error: error.message });
+    console.error('End meeting error:', error.message);
+    return res.status(500).json({ error: 'Failed to end meeting. Please try again.' });
   }
 
   res.status(200).json({ message: 'Meeting ended', meeting: data });
