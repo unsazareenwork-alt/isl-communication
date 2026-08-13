@@ -3,6 +3,7 @@ const http = require("http");
 const cors = require("cors");
 const dotenv = require("dotenv");
 const { Server } = require("socket.io");
+const supabase = require('./supabaseClient');
 
 dotenv.config();
 
@@ -40,16 +41,17 @@ app.get("/", (req, res) => {
     });
 });
 
-
 // Socket connection
 io.on("connection", (socket) => {
     console.log("User connected:", socket.id);
 
     // Join a meeting room
-    socket.on("join-meeting", ({ meetingCode, userName }) => {
+    socket.on("join-meeting", ({ meetingCode, userName, userId, meetingId }) => {
         socket.join(meetingCode);
         socket.data.meetingCode = meetingCode;
         socket.data.userName = userName;
+        socket.data.userId = userId;
+        socket.data.meetingId = meetingId;
 
         console.log(`${userName || socket.id} joined meeting ${meetingCode}`);
 
@@ -59,6 +61,7 @@ io.on("connection", (socket) => {
             userName: userName || "Anonymous"
         });
     });
+
     // WebRTC signaling: relay offer to others in the room
     socket.on("webrtc-offer", ({ offer }) => {
         const { meetingCode } = socket.data;
@@ -89,8 +92,8 @@ io.on("connection", (socket) => {
         socket.to(meetingCode).emit("receive-message", data);
     });
 
-    socket.on("disconnect", () => {
-        const { meetingCode, userName } = socket.data;
+    socket.on("disconnect", async () => {
+        const { meetingCode, userName, userId, meetingId } = socket.data;
         console.log("User disconnected:", socket.id);
 
         if (meetingCode) {
@@ -98,6 +101,20 @@ io.on("connection", (socket) => {
                 socketId: socket.id,
                 userName: userName || "Anonymous"
             });
+        }
+
+        // Best-effort DB update — don't crash the server if this fails
+        if (userId && meetingId) {
+            try {
+                await supabase
+                    .from('meeting_participants')
+                    .update({ left_at: new Date().toISOString() })
+                    .eq('meeting_id', meetingId)
+                    .eq('user_id', userId)
+                    .is('left_at', null);
+            } catch (err) {
+                console.error('Failed to record participant leave time:', err.message);
+            }
         }
     });
 });

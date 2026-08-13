@@ -43,6 +43,8 @@
     let localStream;
     let peerConnection;
     let remoteSocketId = null;
+    let currentUserId = null;
+    let currentMeetingId = null;
 
     const configuration = {
       iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
@@ -63,6 +65,7 @@
       if (res.ok) {
         accessToken = data.session.access_token;
         currentUserName = data.user.user_metadata?.name || email;
+        currentUserId = data.user.id;
         document.getElementById("loginStatus").innerText = `✅ Logged in as ${currentUserName}`;
         log(`Logged in as ${currentUserName}`);
       } else {
@@ -86,6 +89,7 @@
 
       if (res.ok) {
         currentMeetingCode = data.meeting.meeting_code;
+        currentMeetingId = data.meeting.id;
         document.getElementById("meetingStatus").innerText = `✅ Meeting created: ${currentMeetingCode}`;
         log(`Meeting created: ${currentMeetingCode}`);
       } else {
@@ -109,6 +113,7 @@
 
       if (res.ok) {
         currentMeetingCode = data.meeting.meeting_code;
+        currentMeetingId = data.meeting.id;
         document.getElementById("meetingStatus").innerText = `✅ Joined meeting: ${currentMeetingCode}`;
         log(`Joined meeting: ${currentMeetingCode}`);
       } else {
@@ -128,7 +133,13 @@
         localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
         document.getElementById("localVideo").srcObject = localStream;
 
-        socket.emit("join-meeting", { meetingCode: currentMeetingCode, userName: currentUserName });
+        socket.emit("join-meeting", {
+          meetingCode: currentMeetingCode,
+          userName: currentUserName,
+          userId: currentUserId,
+          meetingId: currentMeetingId
+        });
+
         log(`Joined room: ${currentMeetingCode}`);
       });
 
