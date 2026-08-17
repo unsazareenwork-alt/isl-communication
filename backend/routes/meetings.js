@@ -89,7 +89,7 @@ router.post('/leave/:id', authMiddleware, async (req, res) => {
     .eq('user_id', userId)
     .is('left_at', null)
     .select()
-    .single();
+    .maybeSingle();
 
   if (error) {
     console.error('Leave meeting error:', error.message);
