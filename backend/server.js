@@ -20,6 +20,8 @@ const meetingRoutes = require('./routes/meetings');
 app.use('/api/meetings', meetingRoutes);
 const messageRoutes = require('./routes/messages');
 app.use('/api/messages', messageRoutes);
+const aiRoutes = require('./routes/ai');
+app.use('/api/ai', aiRoutes);
 app.use(express.static(__dirname));
 
 app.get('/api/protected-test', authMiddleware, (req, res) => {
