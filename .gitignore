@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Environment / secrets
+.env
+
+# Generated AI data
+ai/data.csv
+ai/training_v2.csv
+
+# Trained models
+ai/*.pkl
+
+# Test images
+ai/test.jpg
+
+# Dataset
+ai/dataset/
+ai/data/
+
+# Editor / OS
+.vscode/
+.DS_Store
