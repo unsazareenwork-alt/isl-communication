@@ -49,9 +49,14 @@ router.post('/predict', authMiddleware, async (req, res) => {
     .select()
     .single();
 
-  if (error) {
+    if (error) {
     console.error('AI predict save error:', error.message);
     return res.status(500).json({ error: 'Failed to save prediction. Please try again.' });
+  }
+
+  const io = req.app.get('io');
+  if (io) {
+    io.to(meeting_id).emit('sign-translation', data);
   }
 
   res.status(201).json({ message: 'Prediction saved', data });

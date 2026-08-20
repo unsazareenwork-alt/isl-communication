@@ -35,6 +35,7 @@ const io = new Server(server, {
         methods: ["GET", "POST"]
     }
 });
+app.set('io', io);
 
 // Basic API test
 app.get("/", (req, res) => {
@@ -48,8 +49,9 @@ io.on("connection", (socket) => {
     console.log("User connected:", socket.id);
 
     // Join a meeting room
-    socket.on("join-meeting", ({ meetingCode, userName, userId, meetingId }) => {
+       socket.on("join-meeting", ({ meetingCode, userName, userId, meetingId }) => {
         socket.join(meetingCode);
+        if (meetingId) socket.join(meetingId);
         socket.data.meetingCode = meetingCode;
         socket.data.userName = userName;
         socket.data.userId = userId;
@@ -57,7 +59,6 @@ io.on("connection", (socket) => {
 
         console.log(`${userName || socket.id} joined meeting ${meetingCode}`);
 
-        // Notify others in the room that someone joined
         socket.to(meetingCode).emit("user-joined", {
             socketId: socket.id,
             userName: userName || "Anonymous"
