@@ -3,10 +3,13 @@ const router = express.Router();
 const supabase = require('../supabaseClient');
 const authMiddleware = require('../middleware/authMiddleware');
 const { isValidUUID, isNonEmptyString } = require('../utils/validate');
+const translateText = require('../utils/translateText');
+
+// Target regional language for translation output.
+// Tamil for now, per team decision — easy to change or extend to multiple languages later.
+const REGIONAL_LANGUAGE = 'ta';
 
 // POST /api/ai/predict
-// Receives a raw AI prediction ({ sign, confidence }) plus meeting context,
-// wraps it into the full messages shape, and saves it.
 router.post('/predict', authMiddleware, async (req, res) => {
   if (!req.body || typeof req.body !== 'object') {
     return res.status(400).json({ error: 'Request body is missing or invalid JSON' });
@@ -36,6 +39,10 @@ router.post('/predict', authMiddleware, async (req, res) => {
     });
   }
 
+  // Translate the recognized sign into the regional language.
+  // If this fails, translated_text just stays null — doesn't block saving.
+  const translated = await translateText(sign, REGIONAL_LANGUAGE);
+
   const { data, error } = await supabase
     .from('messages')
     .insert([{
@@ -43,13 +50,13 @@ router.post('/predict', authMiddleware, async (req, res) => {
       sender_id: senderId,
       message_type: 'sign_translation',
       original_text: sign,
-      translated_text: null,
+      translated_text: translated,
       language: language || 'en'
     }])
     .select()
     .single();
 
-    if (error) {
+  if (error) {
     console.error('AI predict save error:', error.message);
     return res.status(500).json({ error: 'Failed to save prediction. Please try again.' });
   }
