@@ -53,8 +53,13 @@
     // Track display names, keyed by socket id
     const participantNames = {};
 
-    const configuration = {
-      iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+        const configuration = {
+      iceServers: [
+        { urls: "stun:openrelay.metered.ca:80" },
+        { urls: "turn:openrelay.metered.ca:80", username: "openrelayproject", credential: "openrelayproject" },
+        { urls: "turn:openrelay.metered.ca:443", username: "openrelayproject", credential: "openrelayproject" },
+        { urls: "turn:openrelay.metered.ca:443?transport=tcp", username: "openrelayproject", credential: "openrelayproject" }
+      ]
     };
 
     // ---- Step 1: Login ----
