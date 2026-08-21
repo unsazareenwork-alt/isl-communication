@@ -49,7 +49,22 @@ io.on("connection", (socket) => {
     console.log("User connected:", socket.id);
 
     // Join a meeting room
-       socket.on("join-meeting", ({ meetingCode, userName, userId, meetingId }) => {
+    socket.on("join-meeting", ({ meetingCode, userName, userId, meetingId }) => {
+        // Find out who's already in this room BEFORE this socket joins it
+        const room = io.sockets.adapter.rooms.get(meetingCode);
+        const existingParticipants = [];
+        if (room) {
+            for (const socketId of room) {
+                const existingSocket = io.sockets.sockets.get(socketId);
+                if (existingSocket) {
+                    existingParticipants.push({
+                        socketId: existingSocket.id,
+                        userName: existingSocket.data.userName || "Anonymous"
+                    });
+                }
+            }
+        }
+
         socket.join(meetingCode);
         if (meetingId) socket.join(meetingId);
         socket.data.meetingCode = meetingCode;
@@ -59,39 +74,38 @@ io.on("connection", (socket) => {
 
         console.log(`${userName || socket.id} joined meeting ${meetingCode}`);
 
+        // Tell the newly joined socket who is already here, so they can call each one
+        socket.emit("existing-participants", existingParticipants);
+
+        // Notify everyone else that a new participant joined
         socket.to(meetingCode).emit("user-joined", {
             socketId: socket.id,
             userName: userName || "Anonymous"
         });
     });
 
-    // WebRTC signaling: relay offer to others in the room
-    socket.on("webrtc-offer", ({ offer }) => {
-        const { meetingCode } = socket.data;
-        if (!meetingCode) return;
-        socket.to(meetingCode).emit("webrtc-offer", { offer, from: socket.id });
+    // WebRTC signaling: relay offer to ONE specific peer (mesh-style)
+    socket.on("webrtc-offer", ({ offer, to }) => {
+        if (!to) return;
+        io.to(to).emit("webrtc-offer", { offer, from: socket.id });
     });
 
     // WebRTC signaling: relay answer back to the offerer
     socket.on("webrtc-answer", ({ answer, to }) => {
+        if (!to) return;
         io.to(to).emit("webrtc-answer", { answer, from: socket.id });
     });
 
-    // WebRTC signaling: relay ICE candidates
+    // WebRTC signaling: relay ICE candidates to ONE specific peer
     socket.on("webrtc-ice-candidate", ({ candidate, to }) => {
-        if (to) {
-            io.to(to).emit("webrtc-ice-candidate", { candidate, from: socket.id });
-        } else {
-            socket.to(socket.data.meetingCode).emit("webrtc-ice-candidate", { candidate, from: socket.id });
-        }
+        if (!to) return;
+        io.to(to).emit("webrtc-ice-candidate", { candidate, from: socket.id });
     });
 
     // Chat / subtitle message broadcast
     socket.on("send-message", (data) => {
         const { meetingCode } = socket.data;
         if (!meetingCode) return;
-
-        // Broadcast to everyone else in the room (not back to sender)
         socket.to(meetingCode).emit("receive-message", data);
     });
 
@@ -106,7 +120,6 @@ io.on("connection", (socket) => {
             });
         }
 
-        // Best-effort DB update — don't crash the server if this fails
         if (userId && meetingId) {
             try {
                 await supabase
@@ -125,6 +138,7 @@ io.on("connection", (socket) => {
 // Server
 const PORT = process.env.PORT || 5000;
 
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Also accessible on your network at http://192.168.1.85:${PORT}`);
 });

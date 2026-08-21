@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Group Video Call Test</title>
+  <style>
+    body { font-family: sans-serif; }
+    #videoGrid { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+    .video-tile { border: 1px solid black; text-align: center; }
+    .video-tile video { width: 250px; height: 180px; background: #222; }
+    .video-tile p { margin: 4px 0; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <h2>Group Video Call Test (mesh, up to ~4 people)</h2>
+
+  <h3>Step 1: Login</h3>
+  <input id="email" placeholder="Email" value="unsazareenwork+test1@gmail.com" />
+  <input id="password" type="password" placeholder="Password" value="Test1234!" />
+  <button onclick="login()">Login</button>
+  <div id="loginStatus"></div>
+
+  <h3>Step 2: Create or Join Meeting</h3>
+  <button onclick="createMeeting()">Create New Meeting</button>
+  <input id="joinCode" placeholder="Meeting code to join" />
+  <button onclick="joinMeetingRest()">Join Existing Meeting</button>
+  <div id="meetingStatus"></div>
+
+  <h3>Step 3: Join Call</h3>
+  <button onclick="connectSocket()">Connect to Room (starts camera + calls everyone already there)</button>
+
+  <div id="videoGrid"></div>
+
+  <h3>Log:</h3>
+  <div id="log" style="border:1px solid #ccc; padding:10px; height:250px; overflow-y:auto;"></div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+    const API_BASE = "http://localhost:5000/api";
+    const log = (msg) => {
+      document.getElementById("log").innerHTML += `<div>${msg}</div>`;
+    };
+
+    let accessToken = null;
+    let currentUserName = null;
+    let currentUserId = null;
+    let currentMeetingCode = null;
+    let currentMeetingId = null;
+    let socket = null;
+    let localStream;
+
+    // One RTCPeerConnection PER other participant, keyed by their socket id
+    const peers = {};
+    // Track display names, keyed by socket id
+    const participantNames = {};
+
+    const configuration = {
+      iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+    };
+
+    // ---- Step 1: Login ----
+    async function login() {
+      const email = document.getElementById("email").value;
+      const password = document.getElementById("password").value;
+
+      const res = await fetch(`${API_BASE}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email, password })
+      });
+      const data = await res.json();
+
+      if (res.ok) {
+        accessToken = data.session.access_token;
+        currentUserName = data.user.user_metadata?.name || email;
+        currentUserId = data.user.id;
+        document.getElementById("loginStatus").innerText = `✅ Logged in as ${currentUserName}`;
+        log(`Logged in as ${currentUserName}`);
+      } else {
+        document.getElementById("loginStatus").innerText = `❌ ${data.error}`;
+        log(`Login failed: ${data.error}`);
+      }
+    }
+
+    // ---- Step 2: Create meeting ----
+    async function createMeeting() {
+      if (!accessToken) return log("⚠️ Login first.");
+
+      const res = await fetch(`${API_BASE}/meetings/create`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${accessToken}`
+        }
+      });
+      const data = await res.json();
+
+      if (res.ok) {
+        currentMeetingCode = data.meeting.meeting_code;
+        currentMeetingId = data.meeting.id;
+        document.getElementById("meetingStatus").innerText = `✅ Meeting created: ${currentMeetingCode}`;
+        log(`Meeting created: ${currentMeetingCode}`);
+      } else {
+        log(`Create meeting failed: ${data.error}`);
+      }
+    }
+
+    // ---- Step 2 alt: Join meeting ----
+    async function joinMeetingRest() {
+      if (!accessToken) return log("⚠️ Login first.");
+      const code = document.getElementById("joinCode").value;
+
+      const res = await fetch(`${API_BASE}/meetings/join/${code}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${accessToken}`
+        }
+      });
+      const data = await res.json();
+
+      if (res.ok) {
+        currentMeetingCode = data.meeting.meeting_code;
+        currentMeetingId = data.meeting.id;
+        document.getElementById("meetingStatus").innerText = `✅ Joined meeting: ${currentMeetingCode}`;
+        log(`Joined meeting: ${currentMeetingCode}`);
+      } else {
+        log(`Join meeting failed: ${data.error}`);
+      }
+    }
+
+    // ---- Video tile helpers ----
+    function addVideoTile(socketId, userName) {
+      if (document.getElementById(`tile-${socketId}`)) return; // already exists
+      const tile = document.createElement("div");
+      tile.className = "video-tile";
+      tile.id = `tile-${socketId}`;
+      tile.innerHTML = `<video id="video-${socketId}" autoplay playsinline></video><p>${userName}</p>`;
+      document.getElementById("videoGrid").appendChild(tile);
+    }
+
+    function removeVideoTile(socketId) {
+      const tile = document.getElementById(`tile-${socketId}`);
+      if (tile) tile.remove();
+    }
+
+    // ---- Peer connection helpers ----
+    function createPeerConnection(remoteSocketId) {
+      const pc = new RTCPeerConnection(configuration);
+
+      localStream.getTracks().forEach(track => {
+        pc.addTrack(track, localStream);
+      });
+
+      pc.ontrack = (event) => {
+        const videoEl = document.getElementById(`video-${remoteSocketId}`);
+        if (videoEl) videoEl.srcObject = event.streams[0];
+        log(`🎥 Receiving video from ${participantNames[remoteSocketId] || remoteSocketId}`);
+      };
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate) {
+          socket.emit("webrtc-ice-candidate", { candidate: event.candidate, to: remoteSocketId });
+        }
+      };
+
+      peers[remoteSocketId] = pc;
+      return pc;
+    }
+
+    async function callUser(remoteSocketId, remoteUserName) {
+      participantNames[remoteSocketId] = remoteUserName;
+      addVideoTile(remoteSocketId, remoteUserName);
+
+      const pc = createPeerConnection(remoteSocketId);
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      socket.emit("webrtc-offer", { offer, to: remoteSocketId });
+      log(`📞 Calling ${remoteUserName}...`);
+    }
+
+    // ---- Step 3: Connect socket + start camera + join room ----
+    async function connectSocket() {
+      if (!currentMeetingCode) return log("⚠️ Create or join a meeting first.");
+
+      socket = io("http://localhost:5000");
+
+      socket.on("connect", async () => {
+        log("✅ Socket connected: " + socket.id);
+
+        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        addVideoTile("me", `${currentUserName} (You)`);
+        document.getElementById("video-me").srcObject = localStream;
+        document.getElementById("video-me").muted = true;
+
+        socket.emit("join-meeting", {
+          meetingCode: currentMeetingCode,
+          userName: currentUserName,
+          userId: currentUserId,
+          meetingId: currentMeetingId
+        });
+
+        log(`Joined room: ${currentMeetingCode}`);
+      });
+
+      // Told who's already here — call each of them
+      socket.on("existing-participants", (participants) => {
+        log(`Existing participants: ${participants.length}`);
+        participants.forEach(p => callUser(p.socketId, p.userName));
+      });
+
+      // Someone new joined — just remember their name, THEY will call us
+      socket.on("user-joined", (data) => {
+        log(`👋 ${data.userName} joined`);
+        participantNames[data.socketId] = data.userName;
+      });
+
+      // Incoming call from someone
+      socket.on("webrtc-offer", async ({ offer, from }) => {
+        const remoteName = participantNames[from] || "Unknown";
+        addVideoTile(from, remoteName);
+
+        const pc = createPeerConnection(from);
+        await pc.setRemoteDescription(new RTCSessionDescription(offer));
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        socket.emit("webrtc-answer", { answer, to: from });
+        log(`📞 Answered call from ${remoteName}`);
+      });
+
+      socket.on("webrtc-answer", async ({ answer, from }) => {
+        const pc = peers[from];
+        if (pc) {
+          await pc.setRemoteDescription(new RTCSessionDescription(answer));
+          log(`✅ Connected to ${participantNames[from] || from}`);
+        }
+      });
+
+      socket.on("webrtc-ice-candidate", async ({ candidate, from }) => {
+        const pc = peers[from];
+        if (pc) {
+          try {
+            await pc.addIceCandidate(new RTCIceCandidate(candidate));
+          } catch (err) {
+            log("ICE error: " + err.message);
+          }
+        }
+      });
+
+      socket.on("user-left", (data) => {
+        log(`🚪 ${data.userName || data.socketId} left`);
+        const pc = peers[data.socketId];
+        if (pc) {
+          pc.close();
+          delete peers[data.socketId];
+        }
+        delete participantNames[data.socketId];
+        removeVideoTile(data.socketId);
+      });
+    }
+  </script>
+</body>
+</html>
