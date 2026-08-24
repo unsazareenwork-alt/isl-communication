@@ -43,6 +43,11 @@ app.get("/", (req, res) => {
         message: "ISL Communication Backend is running!"
     });
 });
+app.get("/health", (req, res) => {
+    res.json({
+        status: "ok"
+    });
+});
 
 // Socket connection
 io.on("connection", (socket) => {
