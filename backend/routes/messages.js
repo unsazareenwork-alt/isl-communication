@@ -3,8 +3,10 @@ const router = express.Router();
 const supabase = require('../supabaseClient');
 const authMiddleware = require('../middleware/authMiddleware');
 const { isValidUUID, isNonEmptyString } = require('../utils/validate');
+const translateText = require('../utils/translateText');
 
 const VALID_MESSAGE_TYPES = ['chat', 'sign_translation', 'speech_translation'];
+const REGIONAL_LANGUAGE = 'ta'; // Tamil, per team decision — matches ai.js
 
 // POST /api/messages
 router.post('/', authMiddleware, async (req, res) => {
@@ -31,6 +33,13 @@ router.post('/', authMiddleware, async (req, res) => {
     return res.status(400).json({ error: 'language must be a short language code (e.g. "en", "hi")' });
   }
 
+  // Auto-translate speech_translation messages into the regional language,
+  // unless the caller already supplied their own translated_text.
+  let finalTranslatedText = translated_text || null;
+  if (message_type === 'speech_translation' && !finalTranslatedText) {
+    finalTranslatedText = await translateText(original_text, REGIONAL_LANGUAGE);
+  }
+
   const { data, error } = await supabase
     .from('messages')
     .insert([{
@@ -38,7 +47,7 @@ router.post('/', authMiddleware, async (req, res) => {
       sender_id: senderId,
       message_type,
       original_text,
-      translated_text: translated_text || null,
+      translated_text: finalTranslatedText,
       language: language || 'en'
     }])
     .select()
@@ -47,6 +56,12 @@ router.post('/', authMiddleware, async (req, res) => {
   if (error) {
     console.error('Insert message error:', error.message);
     return res.status(500).json({ error: 'Failed to save message. Please try again.' });
+  }
+
+  // Broadcast live to everyone in this meeting's room — same pattern as /api/ai/predict
+  const io = req.app.get('io');
+  if (io) {
+    io.to(meeting_id).emit('new-message', data);
   }
 
   res.status(201).json({ message: 'Message saved', data });
