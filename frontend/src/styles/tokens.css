@@ -1,0 +1,135 @@
+:root {
+  /* ---- Color (light) ---- */
+  --color-bg: #f5f7fb;
+  --color-surface: #ffffff;
+  --color-surface-2: #eef1f7;
+  --color-surface-3: #e4e9f2;
+
+  --color-primary: #1e40af;
+  --color-primary-hover: #1d3aa0;
+  --color-primary-active: #17338c;
+  --color-on-primary: #ffffff;
+
+  --color-accent: #16a34a;
+  --color-accent-hover: #149543;
+  --color-on-accent: #ffffff;
+
+  --color-text-primary: #10162b;
+  --color-text-secondary: #46536b;
+  --color-text-muted: #6b7791;
+  --color-text-on-dark: #ffffff;
+
+  --color-border: #d7deea;
+  --color-border-strong: #b9c4d8;
+
+  --color-ring: #1e40af;
+
+  --color-danger: #dc2626;
+  --color-danger-hover: #c41f1f;
+  --color-on-danger: #ffffff;
+  --color-danger-bg: #fdecec;
+  --color-danger-text: #b42318;
+
+  --color-success: #16a34a;
+  --color-info-bg: #e8effb;
+  --color-info-text: #1e40af;
+
+  --color-focus-ring: 0 0 0 3px rgba(30, 64, 175, 0.35);
+
+  /* ---- Caption / meeting surfaces (dark canvas) ---- */
+  --color-canvas: #0d1220;
+  --color-canvas-panel: #161d31;
+  --color-canvas-tile: #1b2338;
+  --color-canvas-tile-hover: #232d46;
+  --color-on-canvas: #eef1f7;
+  --color-on-canvas-muted: #aab6cd;
+
+  /* ---- Typography ---- */
+  --font-display: "Atkinson Hyperlegible", "Nirmala UI", "Latha", system-ui, sans-serif;
+  --font-body: "Atkinson Hyperlegible", "Nirmala UI", "Latha", system-ui, sans-serif;
+
+  --text-xs: 0.75rem;   /* 12px */
+  --text-sm: 0.875rem;  /* 14px */
+  --text-base: 1rem;    /* 16px */
+  --text-lg: 1.125rem;  /* 18px */
+  --text-xl: 1.375rem;  /* 22px */
+  --text-2xl: 1.75rem;  /* 28px */
+  --text-3xl: 2.25rem;  /* 36px */
+  --text-base-line: 1.5;
+
+  /* ---- Spacing (4px grid) ---- */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+
+  /* ---- Radii ---- */
+  --radius-sm: 0.375rem;
+  --radius-md: 0.625rem;
+  --radius-lg: 0.875rem;
+  --radius-xl: 1.25rem;
+  --radius-full: 999px;
+
+  /* ---- Elevation ---- */
+  --shadow-sm: 0 1px 2px rgba(16, 22, 43, 0.06);
+  --shadow-md: 0 4px 14px rgba(16, 22, 43, 0.08);
+  --shadow-lg: 0 12px 32px rgba(16, 22, 43, 0.14);
+
+  /* ---- Motion ---- */
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --dur-fast: 120ms;
+  --dur-base: 200ms;
+  --dur-slow: 320ms;
+
+  /* ---- Layout ---- */
+  --control-height: 2.75rem;
+  --control-height-sm: 2.375rem;
+  --max-width: 68rem;
+
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+[data-theme="dark"] {
+  --color-bg: #0f1524;
+  --color-surface: #171f31;
+  --color-surface-2: #1e2840;
+  --color-surface-3: #26324e;
+
+  --color-primary: #7c9bf5;
+  --color-primary-hover: #8ba7f7;
+  --color-primary-active: #6688ef;
+  --color-on-primary: #0b1226;
+
+  --color-accent: #34d37e;
+  --color-accent-hover: #4ade8f;
+  --color-on-accent: #06210f;
+
+  --color-text-primary: #eef1f7;
+  --color-text-secondary: #c3ccdd;
+  --color-text-muted: #93a0ba;
+
+  --color-border: #28324b;
+  --color-border-strong: #3a4663;
+
+  --color-ring: #7c9bf5;
+
+  --color-danger: #f87171;
+  --color-danger-hover: #fca5a5;
+  --color-on-danger: #2a0707;
+  --color-danger-bg: #3a1515;
+  --color-danger-text: #fca5a5;
+
+  --color-focus-ring: 0 0 0 3px rgba(124, 155, 245, 0.4);
+
+  --color-canvas: #080b14;
+  --color-canvas-panel: #0f1524;
+  --color-canvas-tile: #131c30;
+  --color-canvas-tile-hover: #1a2540;
+}
