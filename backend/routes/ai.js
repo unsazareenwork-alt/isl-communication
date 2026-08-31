@@ -5,8 +5,6 @@ const authMiddleware = require('../middleware/authMiddleware');
 const { isValidUUID, isNonEmptyString } = require('../utils/validate');
 const translateText = require('../utils/translateText');
 
-// Target regional language for translation output.
-// Tamil for now, per team decision — easy to change or extend to multiple languages later.
 const REGIONAL_LANGUAGE = 'ta';
 
 // POST /api/ai/predict
@@ -16,6 +14,7 @@ router.post('/predict', authMiddleware, async (req, res) => {
   }
 
   const senderId = req.user.id;
+  const senderName = req.user.user_metadata?.name || 'Anonymous';
   const { meeting_id, sign, confidence, language } = req.body;
 
   if (!isValidUUID(meeting_id)) {
@@ -39,8 +38,6 @@ router.post('/predict', authMiddleware, async (req, res) => {
     });
   }
 
-  // Translate the recognized sign into the regional language.
-  // If this fails, translated_text just stays null — doesn't block saving.
   const translated = await translateText(sign, REGIONAL_LANGUAGE);
 
   const { data, error } = await supabase
@@ -61,12 +58,14 @@ router.post('/predict', authMiddleware, async (req, res) => {
     return res.status(500).json({ error: 'Failed to save prediction. Please try again.' });
   }
 
+  const responseData = { ...data, sender_name: senderName };
+
   const io = req.app.get('io');
   if (io) {
-    io.to(meeting_id).emit('sign-translation', data);
+    io.to(meeting_id).emit('sign-translation', responseData);
   }
 
-  res.status(201).json({ message: 'Prediction saved', data });
+  res.status(201).json({ message: 'Prediction saved', data: responseData });
 });
 
 module.exports = router;

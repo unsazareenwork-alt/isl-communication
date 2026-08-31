@@ -37,12 +37,12 @@ const io = new Server(server, {
 });
 app.set('io', io);
 
-// Basic API test
 app.get("/", (req, res) => {
     res.json({
         message: "ISL Communication Backend is running!"
     });
 });
+
 app.get("/health", (req, res) => {
     res.json({
         status: "ok"
@@ -55,7 +55,6 @@ io.on("connection", (socket) => {
 
     // Join a meeting room
     socket.on("join-meeting", ({ meetingCode, userName, userId, meetingId }) => {
-        // Find out who's already in this room BEFORE this socket joins it
         const room = io.sockets.adapter.rooms.get(meetingCode);
         const existingParticipants = [];
         if (room) {
@@ -76,35 +75,52 @@ io.on("connection", (socket) => {
         socket.data.userName = userName;
         socket.data.userId = userId;
         socket.data.meetingId = meetingId;
+        // Track current media state so late joiners could query it later if needed
+        socket.data.cameraOn = true;
+        socket.data.micOn = true;
 
         console.log(`${userName || socket.id} joined meeting ${meetingCode}`);
 
-        // Tell the newly joined socket who is already here, so they can call each one
         socket.emit("existing-participants", existingParticipants);
 
-        // Notify everyone else that a new participant joined
         socket.to(meetingCode).emit("user-joined", {
             socketId: socket.id,
             userName: userName || "Anonymous"
         });
     });
 
-    // WebRTC signaling: relay offer to ONE specific peer (mesh-style)
+    // WebRTC signaling
     socket.on("webrtc-offer", ({ offer, to }) => {
         if (!to) return;
         io.to(to).emit("webrtc-offer", { offer, from: socket.id });
     });
 
-    // WebRTC signaling: relay answer back to the offerer
     socket.on("webrtc-answer", ({ answer, to }) => {
         if (!to) return;
         io.to(to).emit("webrtc-answer", { answer, from: socket.id });
     });
 
-    // WebRTC signaling: relay ICE candidates to ONE specific peer
     socket.on("webrtc-ice-candidate", ({ candidate, to }) => {
         if (!to) return;
         io.to(to).emit("webrtc-ice-candidate", { candidate, from: socket.id });
+    });
+
+    // Camera/mic toggle signaling — lets other participants know when
+    // someone turns their camera or mic on/off, so their UI can update
+    // (e.g. show a "camera off" placeholder instead of a frozen video tile).
+    socket.on("toggle-media", ({ cameraOn, micOn }) => {
+        const { meetingCode, userName } = socket.data;
+        if (!meetingCode) return;
+
+        if (cameraOn !== undefined) socket.data.cameraOn = cameraOn;
+        if (micOn !== undefined) socket.data.micOn = micOn;
+
+        socket.to(meetingCode).emit("peer-media-toggle", {
+            socketId: socket.id,
+            userName: userName || "Anonymous",
+            cameraOn: socket.data.cameraOn,
+            micOn: socket.data.micOn
+        });
     });
 
     // Chat / subtitle message broadcast
@@ -140,7 +156,6 @@ io.on("connection", (socket) => {
     });
 });
 
-// Server
 const PORT = process.env.PORT || 5000;
 
 server.listen(PORT, '0.0.0.0', () => {

@@ -6,11 +6,12 @@ const { isValidUUID, isNonEmptyString } = require('../utils/validate');
 const translateText = require('../utils/translateText');
 
 const VALID_MESSAGE_TYPES = ['chat', 'sign_translation', 'speech_translation'];
-const REGIONAL_LANGUAGE = 'ta'; // Tamil, per team decision — matches ai.js
+const REGIONAL_LANGUAGE = 'ta';
 
 // POST /api/messages
 router.post('/', authMiddleware, async (req, res) => {
   const senderId = req.user.id;
+  const senderName = req.user.user_metadata?.name || 'Anonymous';
   const { meeting_id, message_type, original_text, translated_text, language } = req.body;
 
   if (!isValidUUID(meeting_id)) {
@@ -33,8 +34,6 @@ router.post('/', authMiddleware, async (req, res) => {
     return res.status(400).json({ error: 'language must be a short language code (e.g. "en", "hi")' });
   }
 
-  // Auto-translate speech_translation messages into the regional language,
-  // unless the caller already supplied their own translated_text.
   let finalTranslatedText = translated_text || null;
   if (message_type === 'speech_translation' && !finalTranslatedText) {
     finalTranslatedText = await translateText(original_text, REGIONAL_LANGUAGE);
@@ -58,13 +57,14 @@ router.post('/', authMiddleware, async (req, res) => {
     return res.status(500).json({ error: 'Failed to save message. Please try again.' });
   }
 
-  // Broadcast live to everyone in this meeting's room — same pattern as /api/ai/predict
+  const responseData = { ...data, sender_name: senderName };
+
   const io = req.app.get('io');
   if (io) {
-    io.to(meeting_id).emit('new-message', data);
+    io.to(meeting_id).emit('new-message', responseData);
   }
 
-  res.status(201).json({ message: 'Message saved', data });
+  res.status(201).json({ message: 'Message saved', data: responseData });
 });
 
 // GET /api/messages/:meetingId
@@ -77,7 +77,7 @@ router.get('/:meetingId', authMiddleware, async (req, res) => {
 
   const { data, error } = await supabase
     .from('messages')
-    .select('*')
+    .select('*, profiles(name)')
     .eq('meeting_id', meetingId)
     .order('created_at', { ascending: true });
 
@@ -86,7 +86,12 @@ router.get('/:meetingId', authMiddleware, async (req, res) => {
     return res.status(500).json({ error: 'Failed to fetch messages. Please try again.' });
   }
 
-  res.status(200).json({ messages: data });
+  const messagesWithNames = data.map(msg => {
+    const { profiles, ...rest } = msg;
+    return { ...rest, sender_name: profiles?.name || 'Anonymous' };
+  });
+
+  res.status(200).json({ messages: messagesWithNames });
 });
 
 module.exports = router;
