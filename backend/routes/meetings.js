@@ -100,6 +100,17 @@ router.post('/leave/:id', authMiddleware, async (req, res) => {
     return res.status(404).json({ error: 'No active participation found for this user in this meeting' });
   }
 
+  // Notify others in the room that this specific participant left
+  // (covers the case where the frontend calls this endpoint but the
+  // socket disconnect event hasn't fired yet, or fires separately)
+  const io = req.app.get('io');
+  if (io) {
+    io.to(id).emit('user-left', {
+      userId,
+      message: 'A participant has left the meeting'
+    });
+  }
+
   res.status(200).json({ message: 'Left meeting', participant: data });
 });
 
@@ -136,6 +147,18 @@ router.post('/end/:id', authMiddleware, async (req, res) => {
   if (error) {
     console.error('End meeting error:', error.message);
     return res.status(500).json({ error: 'Failed to end meeting. Please try again.' });
+  }
+
+  // Notify EVERY participant currently in the meeting room that it has ended,
+  // so their clients can automatically disconnect and close their video calls —
+  // not just the host who clicked "End Meeting."
+  const io = req.app.get('io');
+  if (io) {
+    io.to(id).emit('meeting-ended', {
+      message: 'This meeting has been ended by the host',
+      meetingId: id,
+      endedAt: data.ended_at
+    });
   }
 
   res.status(200).json({ message: 'Meeting ended', meeting: data });
