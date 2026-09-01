@@ -63,7 +63,9 @@ io.on("connection", (socket) => {
                 if (existingSocket) {
                     existingParticipants.push({
                         socketId: existingSocket.id,
-                        userName: existingSocket.data.userName || "Anonymous"
+                        userName: existingSocket.data.userName || "Anonymous",
+                        cameraOn: existingSocket.data.cameraOn !== undefined ? existingSocket.data.cameraOn : true,
+                        micOn: existingSocket.data.micOn !== undefined ? existingSocket.data.micOn : true
                     });
                 }
             }
