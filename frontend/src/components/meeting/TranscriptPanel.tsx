@@ -9,6 +9,8 @@ interface TranscriptPanelProps {
   token: string;
   language: DisplayLanguage;
   currentUserId: string;
+  currentUserName: string;
+  senderNames: Record<string, string>;
   onUnauthorized: () => void;
 }
 
@@ -18,7 +20,15 @@ const TYPE_LABEL: Record<MessageType, string> = {
   speech_translation: "Speech",
 };
 
-export function TranscriptPanel({ meetingId, token, language, currentUserId, onUnauthorized }: TranscriptPanelProps) {
+function senderName(m: Message, currentUserId: string, currentUserName: string, senderNames: Record<string, string>): string {
+  if (m.sender_id === currentUserId) return currentUserName || "You";
+  const resolved = senderNames[m.sender_id];
+  if (resolved) return resolved;
+  if (m.sender_name && m.sender_name.trim() && m.sender_name !== "Participant") return m.sender_name;
+  return "Participant";
+}
+
+export function TranscriptPanel({ meetingId, token, language, currentUserId, currentUserName, senderNames, onUnauthorized }: TranscriptPanelProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -49,15 +59,12 @@ export function TranscriptPanel({ meetingId, token, language, currentUserId, onU
 
   return (
     <section className="panel" aria-label="Meeting transcript">
-      <header className="panel__header">
-        <div className="panel__header-row">
-          <h2 className="panel__title">Transcript</h2>
-          <Button variant="ghost" size="sm" onClick={load} disabled={loading}>
-            {loading ? "Loading…" : "Refresh"}
-          </Button>
-        </div>
-        <span className="panel__sub">{language === "en" ? "English" : "Tamil"}</span>
-      </header>
+      <div className="transcript__toolbar">
+        <span className="transcript__count">{messages.length} entries</span>
+        <Button variant="ghost" size="sm" onClick={load} disabled={loading}>
+          {loading ? "Loading…" : "Refresh"}
+        </Button>
+      </div>
 
       <div className="transcript__body">
         {loading && (
@@ -81,9 +88,11 @@ export function TranscriptPanel({ meetingId, token, language, currentUserId, onU
                 <li key={m.id} className="transcript__row">
                   <div className="transcript__meta">
                     <span className="transcript__who">
-                      {m.sender_id === currentUserId ? "You" : "Participant"}
+                      {senderName(m, currentUserId, currentUserName, senderNames)}
                     </span>
-                    <span className="transcript__type">{TYPE_LABEL[m.message_type]}</span>
+                    <span className={["transcript__type", `transcript__type--${m.message_type}`].join(" ")}>
+                      {TYPE_LABEL[m.message_type]}
+                    </span>
                   </div>
                   <p className="transcript__text">{messageDisplayText(m, language)}</p>
                 </li>

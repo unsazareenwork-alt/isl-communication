@@ -2,9 +2,12 @@ import type { AuthUser } from "./types";
 
 /**
  * The Socket.IO join-meeting payload requires a `userName` string used to label
- * participants in the call. Signup intentionally collects no name (backend
- * conflict), so we fall back to a display label derived from the email's local
- * part for in-call labelling only — never for the signup request.
+ * participants in the call.
+ *
+ * Resolution order:
+ *  1. A name present on the auth metadata (signup name).
+ *  2. A display label derived from the email's local part — used only as a
+ *     temporary in-call fallback label.
  */
 export function callerDisplayName(user: AuthUser | null): string {
   const name = user?.user_metadata?.name?.trim();

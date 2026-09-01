@@ -12,6 +12,12 @@ export interface LoginInput {
   password: string;
 }
 
+export interface SignupInput {
+  name: string;
+  email: string;
+  password: string;
+}
+
 /**
  * Sign in with email + password.
  */
@@ -24,19 +30,9 @@ export async function login(input: LoginInput, onUnauthorized?: () => void): Pro
 }
 
 /**
- * Create an account with email + password ONLY.
- *
- * NOTE — Known integration conflict (unresolved):
- * The backend `POST /api/auth/signup` currently requires an `email`, `password`,
- * AND a `name` field (backend/routes/auth.js). The product spec for this frontend
- * deliberately exposes only email + password and does NOT derive, generate, hide,
- * or fabricate a name. We therefore submit only `{ email, password }`.
- *
- * As a result, signup will fail with a 400 from the backend while the `name`
- * requirement remains in place. That backend error is surfaced to the user as-is;
- * we intentionally do NOT paper over it with a fake name or workaround.
+ * Create an account with name, email, and password.
  */
-export async function signup(input: LoginInput, onUnauthorized?: () => void): Promise<AuthResponse> {
+export async function signup(input: SignupInput, onUnauthorized?: () => void): Promise<AuthResponse> {
   return request<AuthResponse>("/api/auth/signup", {
     method: "POST",
     body: input,

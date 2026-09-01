@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MeetingSession } from "../lib/session";
-import type { RemoteTile } from "../lib/session";
+import type { DeviceInfo, Participant, ParticipantInfo, RemoteTile } from "../lib/session";
 import type { Message } from "../lib/types";
 
 export interface MeetingSessionConfig {
@@ -9,6 +9,8 @@ export interface MeetingSessionConfig {
   userName: string;
   userId: string;
 }
+
+export type MeetingSessionHandle = ReturnType<typeof useMeetingSession>;
 
 export interface CaptionItem {
   id: string;
@@ -25,24 +27,26 @@ export function useMeetingSession({
   userId,
 }: MeetingSessionConfig) {
   const [localSocketId, setLocalSocketId] = useState<string | null>(null);
-  // Ref mirrors the live socket id so callbacks created once (the participant
-  // list pruner) read the current value instead of a stale initial `null`.
   const localSocketIdRef = useRef<string | null>(null);
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
-  const [micEnabled, setMicEnabled] = useState(true);
-  const [cameraEnabled, setCameraEnabled] = useState(true);
+  const [micEnabled, setMicEnabled] = useState(false);
+  const [cameraEnabled, setCameraEnabled] = useState(false);
   const [mediaError, setMediaError] = useState<string | null>(null);
   const [tiles, setTiles] = useState<Record<string, RemoteTile>>({});
   const [messages, setMessages] = useState<Message[]>([]);
   const [captions, setCaptions] = useState<CaptionItem[]>([]);
   const [disconnected, setDisconnected] = useState(false);
+  const [meetingEnded, setMeetingEnded] = useState(false);
+  const [devices, setDevices] = useState<DeviceInfo[]>([]);
+  const [selectedCameraId, setSelectedCameraId] = useState<string | null>(null);
+  const [selectedMicrophoneId, setSelectedMicrophoneId] = useState<string | null>(null);
+  const [senderNames, setSenderNames] = useState<Record<string, string>>({});
 
   const sessionRef = useRef<MeetingSession | null>(null);
   const tilesRef = useRef<Record<string, RemoteTile>>({});
-  // Guard against the same message/caption being appended more than once if
-  // Socket.IO ever re-delivers an event (lightweight id-based de-duplication).
   const seenMessageIds = useRef<Set<string>>(new Set());
   const seenCaptionIds = useRef<Set<string>>(new Set());
+  const isJoiningRef = useRef(false);
 
   useEffect(() => {
     const session = new MeetingSession(
@@ -58,17 +62,19 @@ export function useMeetingSession({
           setCameraEnabled(state.cameraEnabled);
         },
         onMediaError: (message) => setMediaError(message),
-        onParticipantList: (list) => {
-          const ownId = localSocketIdRef.current;
+        onParticipantList: (list: Participant[]) => {
           const next = { ...tilesRef.current };
-          // add any newly listed participants
           for (const t of list) {
             const existing = next[t.socketId];
-            next[t.socketId] = { ...t, stream: existing?.stream ?? null };
+            next[t.socketId] = {
+              socketId: t.socketId,
+              userName: t.userName,
+              stream: existing?.stream ?? null,
+              cameraEnabled: t.cameraEnabled,
+              micEnabled: t.micEnabled,
+            };
           }
-          // prune any that are no longer in the list (only safe for tiles we listed)
           for (const id of Object.keys(next)) {
-            if (id === ownId) continue;
             if (!list.some((x) => x.socketId === id)) {
               delete next[id];
             }
@@ -76,10 +82,16 @@ export function useMeetingSession({
           tilesRef.current = next;
           setTiles(next);
         },
-        onParticipantJoined: (p) => {
+        onParticipantJoined: (p: ParticipantInfo) => {
           tilesRef.current = {
             ...tilesRef.current,
-            [p.socketId]: { socketId: p.socketId, userName: p.userName, stream: null },
+            [p.socketId]: {
+              socketId: p.socketId,
+              userName: p.userName,
+              stream: null,
+              cameraEnabled: p.cameraEnabled ?? true,
+              micEnabled: p.micEnabled ?? true,
+            },
           };
           setTiles(tilesRef.current);
         },
@@ -97,8 +109,22 @@ export function useMeetingSession({
             tilesRef.current = next;
             setTiles(next);
           } else {
-            // stream arrived before participant metadata; keep a placeholder
-            next[socketId] = { socketId, userName: "Participant", stream };
+            next[socketId] = {
+              socketId,
+              userName: "Participant",
+              stream,
+              cameraEnabled: true,
+              micEnabled: true,
+            };
+            tilesRef.current = next;
+            setTiles(next);
+          }
+        },
+        onRemoteMediaState: (socketId, mediaState) => {
+          const next = { ...tilesRef.current };
+          const tile = next[socketId];
+          if (tile) {
+            next[socketId] = { ...tile, ...mediaState };
             tilesRef.current = next;
             setTiles(next);
           }
@@ -111,12 +137,16 @@ export function useMeetingSession({
         onCaption: (message) => {
           if (seenCaptionIds.current.has(message.id)) return;
           seenCaptionIds.current.add(message.id);
+          const resolved = sessionRef.current?.resolveSenderName(message.sender_id);
           setCaptions((prev) =>
             [
               ...prev,
               {
                 id: message.id,
-                userName: message.sender_name || "",
+                userName:
+                  message.sender_name && message.sender_name !== "Participant"
+                    ? message.sender_name
+                    : (resolved ?? message.sender_name ?? ""),
                 original: message.original_text,
                 translated: message.translated_text,
                 timestamp: Date.now(),
@@ -125,6 +155,14 @@ export function useMeetingSession({
           );
         },
         onDisconnected: () => setDisconnected(true),
+        onMeetingEnded: () => setMeetingEnded(true),
+        onDevicesChanged: (list) => {
+          setDevices(list);
+          const sel = sessionRef.current?.getSelectedDevices();
+          setSelectedCameraId(sel?.cameraId ?? null);
+          setSelectedMicrophoneId(sel?.microphoneId ?? null);
+        },
+        onSenderNames: (names) => setSenderNames(names),
       },
     );
 
@@ -137,6 +175,32 @@ export function useMeetingSession({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [meetingCode, meetingId, userName, userId]);
 
+  const startPreview = useCallback(async () => {
+    const stream = await sessionRef.current?.startPreview();
+    const sel = sessionRef.current?.getSelectedDevices();
+    setSelectedCameraId(sel?.cameraId ?? null);
+    setSelectedMicrophoneId(sel?.microphoneId ?? null);
+    return stream ?? null;
+  }, []);
+
+  const switchCamera = useCallback(async (deviceId: string) => {
+    await sessionRef.current?.switchCamera(deviceId);
+    const sel = sessionRef.current?.getSelectedDevices();
+    setSelectedCameraId(sel?.cameraId ?? null);
+  }, []);
+
+  const switchMicrophone = useCallback(async (deviceId: string) => {
+    await sessionRef.current?.switchMicrophone(deviceId);
+    const sel = sessionRef.current?.getSelectedDevices();
+    setSelectedMicrophoneId(sel?.microphoneId ?? null);
+  }, []);
+
+  const joinMeeting = useCallback(() => {
+    if (isJoiningRef.current) return;
+    isJoiningRef.current = true;
+    sessionRef.current?.joinMeeting();
+  }, []);
+
   const toggleMic = useCallback(() => {
     sessionRef.current?.toggleMic();
   }, []);
@@ -146,7 +210,6 @@ export function useMeetingSession({
   }, []);
 
   const leaveRoom = useCallback(() => {
-    // destroy() now disconnects the session-owned socket and stops media.
     sessionRef.current?.destroy();
   }, []);
 
@@ -158,6 +221,39 @@ export function useMeetingSession({
     (t) => t.socketId !== localSocketIdRef.current,
   );
 
+  const participants: Participant[] = [
+    {
+      socketId: localSocketIdRef.current ?? "",
+      userName,
+      stream: localStream,
+      isLocal: true,
+      cameraEnabled,
+      micEnabled,
+    },
+    ...participantTiles.map((t) => ({
+      socketId: t.socketId,
+      userName: t.userName,
+      stream: t.stream,
+      isLocal: false,
+      cameraEnabled: t.cameraEnabled,
+      micEnabled: t.micEnabled,
+    })),
+  ];
+
+  // [DIAG] log the participant list handed to the grid
+  if (localStream) {
+    console.log(
+      "[MEDIA] participants for grid:",
+      participants.map((p) => ({
+        isLocal: p.isLocal,
+        name: p.userName,
+        streamIsLocalStream: p.stream === localStream,
+        streamId: p.stream?.id ?? null,
+        cameraEnabled: p.cameraEnabled,
+      })),
+    );
+  }
+
   return {
     localSocketId,
     localStream,
@@ -165,9 +261,20 @@ export function useMeetingSession({
     cameraEnabled,
     mediaError,
     remoteTiles: participantTiles,
+    participants,
     messages,
     captions,
     disconnected,
+    meetingEnded,
+    devices,
+    selectedCameraId,
+    selectedMicrophoneId,
+    senderNames,
+    resolveSenderName: (senderId: string) => sessionRef.current?.resolveSenderName(senderId) ?? null,
+    startPreview,
+    switchCamera,
+    switchMicrophone,
+    joinMeeting,
     toggleMic,
     toggleCamera,
     leaveRoom,

@@ -1,40 +1,59 @@
-import type { RemoteTile } from "../../lib/session";
+import { motion, AnimatePresence } from "motion/react";
+import type { Participant } from "../../lib/session";
 import { VideoTile } from "./VideoTile";
 
 interface VideoGridProps {
-  localStream: MediaStream | null;
+  participants: Participant[];
   localName: string;
   micEnabled: boolean;
   cameraEnabled: boolean;
-  remoteTiles: RemoteTile[];
+  isHost?: boolean;
 }
 
 export function VideoGrid({
-  localStream,
+  participants,
   localName,
   micEnabled,
   cameraEnabled,
-  remoteTiles,
+  isHost = false,
 }: VideoGridProps) {
-  const count = remoteTiles.length + 1; // include self
-  const layoutClass =
-    count <= 1 ? "vg vg--1" : count === 2 ? "vg vg--2" : count <= 4 ? "vg vg--4" : "vg vg--many";
+  const count = participants.length;
 
-  // No local stream (media denied/unavailable) is presented as camera+mic off.
-  const noLocalMedia = !localStream;
-
+  // Responsive auto-fit grid; max 9 visible. No featured/rail stage.
   return (
-    <div className={layoutClass}>
-      <VideoTile
-        stream={localStream}
-        name={localName}
-        isLocal
-        micMuted={!micEnabled || noLocalMedia}
-        cameraOff={!cameraEnabled || noLocalMedia}
-      />
-      {remoteTiles.map((tile) => (
-        <VideoTile key={tile.socketId} stream={tile.stream} name={tile.userName} />
-      ))}
+    <div
+      className={[
+        "vgrid",
+        `vgrid--n${Math.min(Math.max(count, 1), 9)}`,
+      ].join(" ")}
+    >
+      <AnimatePresence initial={false}>
+        {participants.map((p) => {
+          const isLocal = p.isLocal;
+          const cameraOff = isLocal ? !cameraEnabled : !p.cameraEnabled;
+          const micMuted = isLocal ? !micEnabled : !p.micEnabled;
+          return (
+            <motion.div
+              key={isLocal ? "local" : p.socketId}
+              className="vgrid__cell"
+              layout
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              transition={{ duration: 0.18, ease: "easeOut" }}
+            >
+              <VideoTile
+                stream={p.stream}
+                name={isLocal ? localName : p.userName}
+                isLocal={isLocal}
+                host={isLocal && isHost}
+                micMuted={micMuted}
+                cameraOff={cameraOff}
+              />
+            </motion.div>
+          );
+        })}
+      </AnimatePresence>
     </div>
   );
 }

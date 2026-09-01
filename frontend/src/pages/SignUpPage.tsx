@@ -15,8 +15,8 @@ export function SignUpPage() {
     <AuthLayout>
       <AuthForm
         mode="signup"
-        onSubmit={async (email, password) => {
-          await signup(email, password);
+        onSubmit={async (email, password, name) => {
+          await signup(name || "", email, password);
           navigate("/", { replace: true });
         }}
       />

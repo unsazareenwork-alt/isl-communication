@@ -3,7 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useMeeting } from "../context/MeetingContext";
 import { joinMeeting } from "../lib/meetings";
-import { MeetingRoom } from "../components/meeting/MeetingRoom";
+import { MeetingHost } from "../components/meeting/MeetingHost";
 import { Alert } from "../components/ui/Alert";
 
 interface ResolvedMeeting {
@@ -117,7 +117,7 @@ export function MeetingPage() {
   }
 
   return (
-    <MeetingRoom
+    <MeetingHost
       key={room.key}
       meetingId={room.id}
       meetingCode={room.code}

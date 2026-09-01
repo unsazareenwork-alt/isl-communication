@@ -1,34 +1,48 @@
-import type { RemoteTile } from "../../lib/session";
+import { Microphone, MicrophoneSlash, VideoCameraSlash } from "@phosphor-icons/react";
+import type { Participant } from "../../lib/session";
 
 interface ParticipantsPanelProps {
+  participants: Participant[];
   localName: string;
-  remoteTiles: RemoteTile[];
   meetingCode: string;
+  isHost: boolean;
+  localMicEnabled: boolean;
+  localCameraEnabled: boolean;
 }
 
-export function ParticipantsPanel({ localName, remoteTiles, meetingCode }: ParticipantsPanelProps) {
+export function ParticipantsPanel({
+  participants,
+  localName,
+  meetingCode,
+  isHost,
+  localMicEnabled,
+  localCameraEnabled,
+}: ParticipantsPanelProps) {
   return (
     <section className="panel" aria-label="Participants">
-      <header className="panel__header">
-        <h2 className="panel__title">
-          Participants{" "}
-          <span className="panel__count">{remoteTiles.length + 1}</span>
-        </h2>
-      </header>
-
       <ul className="panel__list">
-        <li className="panel__item">
-          <span className="panel__avatar">{initials(localName || "You")}</span>
-          <span className="panel__pname">
-            {localName || "You"} <span className="panel__you">(you)</span>
-          </span>
-        </li>
-        {remoteTiles.map((tile) => (
-          <li key={tile.socketId || tile.userName} className="panel__item">
-            <span className="panel__avatar">{initials(tile.userName)}</span>
-            <span className="panel__pname">{tile.userName}</span>
-          </li>
-        ))}
+        {participants.map((p) => {
+          const isLocal = p.isLocal;
+          const name = isLocal ? localName : p.userName;
+          const micOn = isLocal ? localMicEnabled : p.micEnabled;
+          const camOn = isLocal ? localCameraEnabled : p.cameraEnabled;
+          return (
+            <li key={isLocal ? "local" : p.socketId || p.userName} className="panel__item">
+              <span className="panel__avatar">{initials(name || "You")}</span>
+              <span className="panel__pname">
+                {name || "You"} {isLocal && <span className="panel__you">(you)</span>}
+              </span>
+              {isLocal && isHost && <span className="panel__chip">Host</span>}
+              {(!micOn || !camOn) && (
+                <span className="panel__media">
+                  {!micOn && <MicrophoneSlash size={14} weight="fill" aria-label="Microphone off" />}
+                  {!camOn && <VideoCameraSlash size={14} weight="fill" aria-label="Camera off" />}
+                  {micOn && <Microphone size={14} weight="fill" aria-label="Microphone on" />}
+                </span>
+              )}
+            </li>
+          );
+        })}
       </ul>
 
       <footer className="panel__footer">

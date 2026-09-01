@@ -10,7 +10,7 @@ interface AuthState {
   user: AuthUser | null;
   isAuthenticated: boolean;
   login: (email: string, password: string) => Promise<void>;
-  signup: (email: string, password: string) => Promise<void>;
+  signup: (name: string, email: string, password: string) => Promise<void>;
   logout: () => void;
   handleUnauthorized: () => void;
 }
@@ -59,9 +59,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   );
 
   const signup = useCallback(
-    async (email: string, password: string) => {
-      // Email + password only; known backend conflict surfaces its own 400.
-      const res = await signupRequest({ email, password }, handleUnauthorized);
+    async (name: string, email: string, password: string) => {
+      const res = await signupRequest({ name, email, password }, handleUnauthorized);
       persist(res.session.access_token, res.user);
     },
     [persist, handleUnauthorized],

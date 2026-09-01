@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
 import { Link } from "react-router-dom";
+import { Envelope, Lock, User, ArrowRight } from "@phosphor-icons/react";
 import { Button } from "../ui/Button";
 import { Field } from "../ui/Field";
 import { Input } from "../ui/Input";
@@ -10,11 +11,14 @@ type Mode = "login" | "signup";
 
 interface AuthFormProps {
   mode: Mode;
-  onSubmit: (email: string, password: string) => Promise<void>;
+  onSubmit: (email: string, password: string, name?: string) => Promise<void>;
 }
 
-function validate(email: string, password: string): Record<string, string> {
+function validate(email: string, password: string, name?: string, mode?: Mode): Record<string, string> {
   const errors: Record<string, string> = {};
+  if (mode === "signup" && (!name || !name.trim())) {
+    errors.name = "Name is required.";
+  }
   if (!email.trim()) {
     errors.email = "Email is required.";
   } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
@@ -29,6 +33,7 @@ function validate(email: string, password: string): Record<string, string> {
 }
 
 export function AuthForm({ mode, onSubmit }: AuthFormProps) {
+  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -40,15 +45,18 @@ export function AuthForm({ mode, onSubmit }: AuthFormProps) {
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setFormError(null);
-    const nextErrors = validate(email, password);
+    const nextErrors = validate(email, password, name, mode);
     setErrors(nextErrors);
     if (Object.keys(nextErrors).length > 0) {
       return;
     }
     setLoading(true);
     try {
-      await onSubmit(email.trim(), password);
-      // navigation handled by the page
+      if (isLogin) {
+        await onSubmit(email.trim(), password);
+      } else {
+        await onSubmit(email.trim(), password, name.trim());
+      }
     } catch (err) {
       setFormError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
       setLoading(false);
@@ -57,41 +65,72 @@ export function AuthForm({ mode, onSubmit }: AuthFormProps) {
 
   return (
     <form className="auth__form" onSubmit={handleSubmit} noValidate>
-      <h1 className="auth__title">{isLogin ? "Welcome back" : "Create your account"}</h1>
-      <p className="auth__subtitle">
-        {isLogin
-          ? "Sign in to join or start a meeting."
-          : "Sign up with just your email and a password."}
-      </p>
+      <div className="auth__heading">
+        <span className="auth__kicker">{isLogin ? "Welcome back" : "Get started"}</span>
+        <h2 className="auth__title">{isLogin ? "Sign in" : "Create your account"}</h2>
+        <p className="auth__subtitle">
+          {isLogin ? "Join or start a meeting." : "Set up your account to begin."}
+        </p>
+      </div>
 
       {formError && <Alert tone="error">{formError}</Alert>}
 
-      <Field label="Email" htmlFor={`${mode}-email`} error={errors.email}>
-        <Input
-          id={`${mode}-email`}
-          type="email"
-          autoComplete="email"
-          placeholder="you@example.com"
-          value={email}
-          invalid={Boolean(errors.email)}
-          onChange={(e) => setEmail(e.target.value)}
-        />
+      {!isLogin && (
+        <Field label="Full name" htmlFor="signup-name" error={errors.name}>
+          <div className="input-wrap">
+            <span className="input-wrap__icon" aria-hidden="true">
+              <User size={18} weight="regular" />
+            </span>
+            <Input
+              id="signup-name"
+              type="text"
+              autoComplete="name"
+              placeholder="Your full name"
+              value={name}
+              invalid={Boolean(errors.name)}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </div>
+        </Field>
+      )}
+
+      <Field label="Email address" htmlFor={`${mode}-email`} error={errors.email}>
+        <div className="input-wrap">
+          <span className="input-wrap__icon" aria-hidden="true">
+            <Envelope size={18} weight="regular" />
+          </span>
+          <Input
+            id={`${mode}-email`}
+            type="email"
+            autoComplete="email"
+            placeholder="you@example.com"
+            value={email}
+            invalid={Boolean(errors.email)}
+            onChange={(e) => setEmail(e.target.value)}
+          />
+        </div>
       </Field>
 
       <Field label="Password" htmlFor={`${mode}-password`} error={errors.password}>
-        <Input
-          id={`${mode}-password`}
-          type="password"
-          autoComplete={isLogin ? "current-password" : "new-password"}
-          placeholder="Your password"
-          value={password}
-          invalid={Boolean(errors.password)}
-          onChange={(e) => setPassword(e.target.value)}
-        />
+        <div className="input-wrap">
+          <span className="input-wrap__icon" aria-hidden="true">
+            <Lock size={18} weight="regular" />
+          </span>
+          <Input
+            id={`${mode}-password`}
+            type="password"
+            autoComplete={isLogin ? "current-password" : "new-password"}
+            placeholder="Your password"
+            value={password}
+            invalid={Boolean(errors.password)}
+            onChange={(e) => setPassword(e.target.value)}
+          />
+        </div>
       </Field>
 
       <Button type="submit" variant="primary" size="lg" loading={loading} className="auth__submit">
         {isLogin ? "Sign in" : "Create account"}
+        {!loading && <ArrowRight size={18} weight="bold" aria-hidden="true" />}
       </Button>
 
       <p className="auth__switch">

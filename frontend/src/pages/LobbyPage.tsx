@@ -4,16 +4,13 @@ import { useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
 import { useMeeting } from "../context/MeetingContext";
 import { createMeeting, joinMeeting } from "../lib/meetings";
+import { VideoCamera, Key, SignOut, Plus } from "@phosphor-icons/react";
 import { Button } from "../components/ui/Button";
 import { Field } from "../components/ui/Field";
 import { Input } from "../components/ui/Input";
 import { Alert } from "../components/ui/Alert";
 import { Logo } from "../components/ui/Logo";
-
-interface CreatedMeeting {
-  id: string;
-  code: string;
-}
+import { callerDisplayName } from "../lib/identity";
 
 export function LobbyPage() {
   const { user, token, logout, handleUnauthorized } = useAuth();
@@ -21,23 +18,22 @@ export function LobbyPage() {
   const navigate = useNavigate();
 
   const [creating, setCreating] = useState(false);
-  const [created, setCreated] = useState<CreatedMeeting | null>(null);
   const [joinCode, setJoinCode] = useState("");
   const [joining, setJoining] = useState(false);
   const [joinError, setJoinError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
 
-  const displayName = user?.user_metadata?.name || user?.email || "";
+  const displayName = callerDisplayName(user);
 
   async function handleCreate() {
     if (!token) return;
     setCreating(true);
+    setJoinError(null);
     try {
       const res = await createMeeting(token, handleUnauthorized);
       const meeting = res.meeting;
       const active = { id: meeting.id, code: meeting.meeting_code, isHost: true };
-      setCreated(active);
       setMeeting(active);
+      navigate(`/meeting/${meeting.meeting_code}`);
     } catch (err) {
       setJoinError(err instanceof Error ? err.message : "Could not create the meeting.");
     } finally {
@@ -58,7 +54,6 @@ export function LobbyPage() {
     try {
       const res = await joinMeeting(code, token, handleUnauthorized);
       const meeting = res.meeting;
-      // Host status is governed by the backend: whoever created the meeting.
       setMeeting({
         id: meeting.id,
         code: meeting.meeting_code,
@@ -71,85 +66,73 @@ export function LobbyPage() {
     }
   }
 
-  // After creating a meeting, show the shareable code until the user enters.
   return (
-    <div className="app-shell">
+    <div className="app-shell lobby">
+      <div className="lobby__glow lobby__glow--1" aria-hidden="true" />
+      <div className="lobby__glow lobby__glow--2" aria-hidden="true" />
+
       <header className="lobby__header">
         <div className="container lobby__header-inner">
           <Logo />
           <div className="lobby__user">
             <span className="lobby__user-name">{displayName}</span>
             <Button variant="ghost" size="sm" onClick={logout}>
+              <SignOut size={16} weight="bold" aria-hidden="true" />
               Sign out
             </Button>
           </div>
         </div>
       </header>
 
-      <main className="container lobby__main">
-        <h1 className="lobby__title">Start or join a meeting</h1>
-        <p className="lobby__subtitle">
-          Create a room to share a code, or enter a code you were given.
-        </p>
+      <main className="lobby__main">
+        <div className="lobby__hero">
+          <span className="lobby__eyebrow">Real-time ISL communication</span>
+          <h1 className="lobby__title">Connect with Clarity</h1>
+          <p className="lobby__subtitle">
+            High-fidelity ISL translation for seamless, video-first communication. Start a new
+            session or join an existing room.
+          </p>
+        </div>
 
         <div className="lobby__grid">
           <section className="lobby__panel" aria-labelledby="create-title">
-            <h2 id="create-title" className="lobby__panel-title">
-              Start a meeting
-            </h2>
-            <p className="lobby__panel-desc">
-              Create a room and share the code so others can join you.
-            </p>
-            {created && !creating ? (
-              <div className="lobby__created">
-                <p className="lobby__created-label">Share this code with others</p>
-                <div className="lobby__codebox">
-                  <code className="lobby__code">{created.code}</code>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={async () => {
-                      try {
-                        await navigator.clipboard.writeText(created.code);
-                        setCopied(true);
-                        window.setTimeout(() => setCopied(false), 2000);
-                      } catch {
-                        // fallback: no-op; clipboard unavailable
-                      }
-                    }}
-                  >
-                    {copied ? "Copied" : "Copy"}
-                  </Button>
-                </div>
-                <Button
-                  variant="primary"
-                  size="lg"
-                  className="lobby__cta"
-                  onClick={() => navigate(`/meeting/${created.code}`)}
-                >
-                  Enter meeting
-                </Button>
-              </div>
-            ) : (
-              <Button
-                variant="primary"
-                size="lg"
-                loading={creating}
-                onClick={handleCreate}
-                className="lobby__cta"
-              >
-                Create a meeting
-              </Button>
-            )}
+            <span className="lobby__panel-decor" aria-hidden="true">
+              <Plus size={120} weight="regular" />
+            </span>
+            <span className="lobby__panel-icon" aria-hidden="true">
+              <VideoCamera size={24} weight="fill" />
+            </span>
+            <div className="lobby__panel-copy">
+              <h2 id="create-title" className="lobby__panel-title">
+                New Meeting
+              </h2>
+              <p className="lobby__panel-desc">
+                Generate a code to start translating instantly.
+              </p>
+            </div>
+            <Button
+              variant="primary"
+              size="lg"
+              loading={creating}
+              onClick={handleCreate}
+              className="lobby__cta"
+            >
+              Create Room
+            </Button>
           </section>
 
           <section className="lobby__panel" aria-labelledby="join-title">
-            <h2 id="join-title" className="lobby__panel-title">
-              Join a meeting
-            </h2>
-            <p className="lobby__panel-desc">
-              Enter the code the host shared with you.
-            </p>
+            <span className="lobby__panel-icon lobby__panel-icon--muted" aria-hidden="true">
+              <Key size={24} weight="fill" />
+            </span>
+            <div className="lobby__panel-copy">
+              <h2 id="join-title" className="lobby__panel-title">
+                Join Meeting
+              </h2>
+              <p className="lobby__panel-desc">
+                Enter the code the host shared with you.
+              </p>
+            </div>
             <form onSubmit={handleJoin} className="lobby__join">
               <Field label="Meeting code" htmlFor="meeting-code">
                 <Input
@@ -173,7 +156,7 @@ export function LobbyPage() {
                 disabled={!joinCode.trim()}
                 className="lobby__cta"
               >
-                Join meeting
+                Join Room
               </Button>
             </form>
           </section>
