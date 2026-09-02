@@ -4,6 +4,7 @@ import { ArrowLeft, X, UsersThree, ChatText, Article, Copy } from "@phosphor-ico
 import { useAuth } from "../../context/AuthContext";
 import { useMeeting } from "../../context/MeetingContext";
 import type { MeetingSessionHandle } from "../../hooks/useMeetingSession";
+import { useSignLanguageAI } from "../../hooks/useSignLanguageAI";
 import { callerDisplayName } from "../../lib/identity";
 import { endMeeting, leaveMeeting } from "../../lib/meetings";
 import { saveMessage } from "../../lib/messages";
@@ -38,6 +39,12 @@ export function MeetingRoom({ meetingId, meetingCode, isHost, onExited, session 
   const [language, setLanguage] = useState<DisplayLanguage>("en");
   const [actionError, setActionError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+
+  useSignLanguageAI({
+    stream: session.localStream,
+    meetingId,
+    enabled: session.cameraEnabled,
+  });
 
   const participantCount = session.participants.length;
 
