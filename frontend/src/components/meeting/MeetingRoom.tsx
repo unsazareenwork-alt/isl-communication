@@ -40,7 +40,7 @@ export function MeetingRoom({ meetingId, meetingCode, isHost, onExited, session 
   const [actionError, setActionError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
-  useSignLanguageAI({
+  const { aiSentence, detectedWord, reset: resetAi } = useSignLanguageAI({
     stream: session.localStream,
     meetingId,
     enabled: session.cameraEnabled,
@@ -121,6 +121,10 @@ export function MeetingRoom({ meetingId, meetingCode, isHost, onExited, session 
     onExited();
   }
 
+  function handleClearTranslation() {
+    resetAi();
+  }
+
   return (
     <div className="meeting">
       <header className="meeting__top">
@@ -189,6 +193,33 @@ export function MeetingRoom({ meetingId, meetingCode, isHost, onExited, session 
         />
 
         <CaptionsOverlay captions={session.captions} language={language} />
+
+        {(aiSentence || detectedWord) && (
+          <div className="isl-translation" aria-live="polite">
+            <div className="isl-translation__head">
+              <span className="isl-translation__title">ISL Translation</span>
+              <button
+                type="button"
+                className="isl-translation__clear"
+                aria-label="Clear translation"
+                title="Clear translation"
+                onClick={handleClearTranslation}
+              >
+                <X size={14} weight="bold" aria-hidden="true" />
+              </button>
+            </div>
+            {detectedWord && (
+              <p className="isl-translation__detected">
+                <span className="isl-translation__label">Detected:</span> {detectedWord}
+              </p>
+            )}
+            {aiSentence && (
+              <p className="isl-translation__sentence">
+                <span className="isl-translation__label">Sentence:</span> {aiSentence}
+              </p>
+            )}
+          </div>
+        )}
 
         <AnimatePresence>
           {activePanel && (

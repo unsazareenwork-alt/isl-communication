@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 const FRAME_INTERVAL_MS = 200;
 const FRAME_WIDTH = 640;
@@ -22,6 +22,18 @@ export function useSignLanguageAI({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const frameLoopRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const visibleRef = useRef(true);
+
+  const [aiSentence, setAiSentence] = useState("");
+  const [detectedWord, setDetectedWord] = useState("");
+
+  const reset = useCallback(() => {
+    setAiSentence("");
+    setDetectedWord("");
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "reset" }));
+    }
+  }, []);
 
   useEffect(() => {
     visibleRef.current = true;
@@ -92,6 +104,23 @@ export function useSignLanguageAI({
         startCapture();
       };
 
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          if (data && data.type === "prediction") {
+            setAiSentence(data.sentence || "");
+            if (data.accepted === true) {
+              setDetectedWord(data.word || data.prediction || "");
+            }
+          } else if (data && data.type === "reset") {
+            setAiSentence("");
+            setDetectedWord("");
+          }
+        } catch {
+          // ignore non-JSON messages from the AI server
+        }
+      };
+
       ws.onerror = (event) => {
         console.error("[ISL AI] WebSocket error:", event);
         stopCapture();
@@ -126,6 +155,7 @@ export function useSignLanguageAI({
         ws.onopen = null;
         ws.onerror = null;
         ws.onclose = null;
+        ws.onmessage = null;
         ws.close();
         wsRef.current = null;
       }
@@ -135,4 +165,6 @@ export function useSignLanguageAI({
       canvasRef.current = null;
     };
   }, [stream, meetingId, enabled]);
+
+  return { aiSentence, detectedWord, reset };
 }

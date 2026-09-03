@@ -389,6 +389,86 @@
   font-size: clamp(var(--text-base), 2vw, var(--text-lg));
 }
 
+/* ===== ISL AI translation card ===== */
+.isl-translation {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  top: var(--space-4);
+  width: min(560px, calc(100% - var(--space-8)));
+  max-width: 100%;
+  z-index: 15;
+  pointer-events: auto;
+  background: rgba(16, 20, 21, 0.95);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(69, 71, 75, 0.35);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.6);
+  padding: var(--space-3) var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  text-align: left;
+}
+.isl-translation__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.isl-translation__title {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  color: var(--color-primary);
+  background: rgba(4, 180, 162, 0.15);
+  border: 1px solid var(--color-primary-border);
+  padding: 0.2rem 0.7rem;
+  border-radius: var(--radius-full);
+}
+.isl-translation__clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.6rem;
+  height: 1.6rem;
+  border: none;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+.isl-translation__clear:hover {
+  background: var(--color-surface-3);
+  color: var(--color-on-canvas);
+}
+.isl-translation__clear:focus-visible {
+  outline: none;
+  box-shadow: var(--color-focus-ring);
+}
+.isl-translation__detected,
+.isl-translation__sentence {
+  line-height: 1.35;
+  color: #fff;
+  font-weight: 500;
+  font-size: var(--text-base);
+}
+.isl-translation__label {
+  color: var(--color-text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-right: 0.3rem;
+}
+.isl-translation__detected {
+  color: var(--color-primary);
+  font-size: var(--text-sm);
+}
+
 /* ===== Drawer (participants / chat / transcript) ===== */
 .meeting__drawer {
   position: absolute;
