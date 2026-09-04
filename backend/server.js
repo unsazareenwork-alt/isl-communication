@@ -37,6 +37,13 @@ const io = new Server(server, {
 });
 app.set('io', io);
 
+// Tracks the single active socket per (meetingCode, userId), so the same
+// user opening the same meeting in a second tab/browser replaces their old
+// connection instead of showing up as a second participant.
+// Key: `${meetingCode}::${userId}`  Value: socket.id of the current active socket
+const activeUserSockets = new Map();
+const activeKey = (meetingCode, userId) => `${meetingCode}::${userId}`;
+
 app.get("/", (req, res) => {
     res.json({
         message: "ISL Communication Backend is running!"
@@ -55,14 +62,37 @@ io.on("connection", (socket) => {
 
     // Join a meeting room
     socket.on("join-meeting", ({ meetingCode, userName, userId, meetingId }) => {
+        // If this same (meetingCode, userId) already has an active socket
+        // (e.g. same user opened a second tab/browser), replace it cleanly
+        // instead of letting both sockets sit in the room as two participants.
+        if (userId) {
+            const key = activeKey(meetingCode, userId);
+            const oldSocketId = activeUserSockets.get(key);
+            if (oldSocketId && oldSocketId !== socket.id) {
+                const oldSocket = io.sockets.sockets.get(oldSocketId);
+                if (oldSocket) {
+                    // Mark it so its own "disconnect" handler knows it was
+                    // replaced, not a real leave — skips emitting user-left /
+                    // writing left_at for a user who is actually still here.
+                    oldSocket.data.replacedBy = socket.id;
+                    oldSocket.leave(meetingCode);
+                    if (oldSocket.data.meetingId) oldSocket.leave(oldSocket.data.meetingId);
+                    oldSocket.disconnect(true);
+                }
+            }
+            activeUserSockets.set(key, socket.id);
+        }
+
         const room = io.sockets.adapter.rooms.get(meetingCode);
         const existingParticipants = [];
         if (room) {
             for (const socketId of room) {
+                if (socketId === socket.id) continue;
                 const existingSocket = io.sockets.sockets.get(socketId);
                 if (existingSocket) {
                     existingParticipants.push({
                         socketId: existingSocket.id,
+                        userId: existingSocket.data.userId || null,
                         userName: existingSocket.data.userName || "Anonymous",
                         cameraOn: existingSocket.data.cameraOn !== undefined ? existingSocket.data.cameraOn : true,
                         micOn: existingSocket.data.micOn !== undefined ? existingSocket.data.micOn : true
@@ -87,6 +117,7 @@ io.on("connection", (socket) => {
 
         socket.to(meetingCode).emit("user-joined", {
             socketId: socket.id,
+            userId: userId || null,
             userName: userName || "Anonymous"
         });
     });
@@ -133,14 +164,33 @@ io.on("connection", (socket) => {
     });
 
     socket.on("disconnect", async () => {
-        const { meetingCode, userName, userId, meetingId } = socket.data;
+        const { meetingCode, userName, userId, meetingId, replacedBy } = socket.data;
         console.log("User disconnected:", socket.id);
+
+        // This socket was replaced by a newer connection from the same user
+        // (rejoin from another tab/browser) — the user is still present via
+        // the new socket, so don't emit user-left or mark them as having
+        // left in the DB. Just clean up silently.
+        if (replacedBy) {
+            return;
+        }
 
         if (meetingCode) {
             socket.to(meetingCode).emit("user-left", {
                 socketId: socket.id,
+                userId: userId || null,
                 userName: userName || "Anonymous"
             });
+        }
+
+        // Only remove this socket's map entry if it's still the recorded
+        // active socket for this user — avoids a stale/late disconnect event
+        // wiping out a newer connection's entry.
+        if (userId && meetingCode) {
+            const key = activeKey(meetingCode, userId);
+            if (activeUserSockets.get(key) === socket.id) {
+                activeUserSockets.delete(key);
+            }
         }
 
         if (userId && meetingId) {
