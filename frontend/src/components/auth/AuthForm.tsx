@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import type { FormEvent } from "react";
-import { Link, useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { Envelope, Lock, User, ArrowRight } from "@phosphor-icons/react";
 import { Button } from "../ui/Button";
 import { Field } from "../ui/Field";
@@ -12,6 +12,7 @@ type Mode = "login" | "signup";
 interface AuthFormProps {
   mode: Mode;
   onSubmit: (email: string, password: string, name?: string, remember?: boolean) => Promise<void>;
+  hideSwitch?: boolean;
 }
 
 function validate(email: string, password: string, name?: string, mode?: Mode): Record<string, string> {
@@ -32,7 +33,7 @@ function validate(email: string, password: string, name?: string, mode?: Mode): 
   return errors;
 }
 
-export function AuthForm({ mode, onSubmit }: AuthFormProps) {
+export function AuthForm({ mode, onSubmit, hideSwitch = false }: AuthFormProps) {
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -40,9 +41,15 @@ export function AuthForm({ mode, onSubmit }: AuthFormProps) {
   const [formError, setFormError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [remember, setRemember] = useState(false);
+  const navigate = useNavigate();
   const location = useLocation();
 
   const isLogin = mode === "login";
+
+  useEffect(() => {
+    setErrors({});
+    setFormError(null);
+  }, [mode]);
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -64,6 +71,15 @@ export function AuthForm({ mode, onSubmit }: AuthFormProps) {
       setLoading(false);
     }
   }
+
+  const handleSwitch = useCallback(
+    (e: React.MouseEvent<HTMLAnchorElement>) => {
+      e.preventDefault();
+      const target = isLogin ? "/signup" : "/login";
+      navigate(target, { state: location.state });
+    },
+    [isLogin, navigate, location.state],
+  );
 
   return (
     <form className="auth__form" onSubmit={handleSubmit} noValidate>
@@ -147,23 +163,25 @@ export function AuthForm({ mode, onSubmit }: AuthFormProps) {
         {!loading && <ArrowRight size={18} weight="bold" aria-hidden="true" />}
       </Button>
 
-      <p className="auth__switch">
-        {isLogin ? (
-          <>
-            New here?{" "}
-            <Link to="/signup" state={location.state} className="auth__link">
-              Create an account
-            </Link>
-          </>
-        ) : (
-          <>
-            Already have an account?{" "}
-            <Link to="/login" className="auth__link">
-              Sign in
-            </Link>
-          </>
-        )}
-      </p>
+      {!hideSwitch && (
+        <p className="auth__switch">
+          {isLogin ? (
+            <>
+              New here?{" "}
+              <a href="/signup" onClick={handleSwitch} className="auth__link">
+                Create an account
+              </a>
+            </>
+          ) : (
+            <>
+              Already have an account?{" "}
+              <a href="/login" onClick={handleSwitch} className="auth__link">
+                Sign in
+              </a>
+            </>
+          )}
+        </p>
+      )}
     </form>
   );
 }

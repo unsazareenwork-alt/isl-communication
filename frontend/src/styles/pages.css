@@ -40,6 +40,29 @@
   height: 26rem;
   background: rgba(3, 0, 76, 0.22);
 }
+.auth__cursor-glow {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  overflow: hidden;
+}
+.auth__cursor-glow::after {
+  content: "";
+  position: absolute;
+  width: 28rem;
+  height: 28rem;
+  top: var(--my, 50%);
+  left: var(--mx, 50%);
+  transform: translate(-50%, -50%);
+  background: radial-gradient(
+    circle,
+    rgba(79, 219, 200, 0.1),
+    transparent 75%
+  );
+  border-radius: 50%;
+  filter: blur(60px);
+}
 .auth__brand-block {
   position: relative;
   z-index: 1;
@@ -69,17 +92,159 @@
   color: var(--color-text-secondary);
   margin-top: var(--space-2);
 }
+/* ===== Auth card — source-style sweep container =====
+   Geometry ported from animation_login_signup_page:
+   - container clips an oversized rounded toggle surface
+   - two 50%-wide form panels translate to opposite halves
+   - two toggle panels ride the surface with staggered delays */
 .auth__card {
   position: relative;
   z-index: 1;
   width: 100%;
-  max-width: 26rem;
-  background: rgba(25, 28, 30, 0.85);
-  border: 1px solid rgba(224, 227, 229, 0.1);
+  max-width: 56rem;
+  height: 36rem;
+  height: clamp(32rem, calc(100svh - 13rem), 37rem);
+  background: var(--color-surface);
+  border: 1px solid var(--color-primary-border);
   border-radius: var(--radius-xl);
-  box-shadow: 0 24px 48px rgba(0, 0, 0, 0.5);
-  padding: var(--space-8);
-  backdrop-filter: blur(20px);
+  box-shadow: var(--shadow-lg), var(--shadow-glow);
+  overflow: hidden;
+}
+
+/* --- 50/50 form panels (reference .form-box) --- */
+.auth__form-box {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 50%;
+  height: 100%;
+  background: var(--color-surface);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-6);
+  z-index: 1;
+  transition:
+    right 0.6s ease-in-out 1.2s,
+    visibility 0s 1.2s;
+}
+.auth__card.active .auth__form-box {
+  right: 50%;
+}
+.auth__form-box--register {
+  visibility: hidden;
+}
+.auth__card.active .auth__form-box--register {
+  visibility: visible;
+}
+.auth__form-box .auth__form {
+  width: 100%;
+}
+
+/* --- toggle overlay (reference .toggle-box) --- */
+.auth__toggle-box {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  z-index: 2;
+  pointer-events: none;
+}
+/* The main moving surface: ~300% of the container width, far outside its
+   normal bounds, large rounded radius — clipped by the card's overflow. */
+.auth__toggle-surface {
+  position: absolute;
+  left: -250%;
+  top: 0;
+  width: 300%;
+  height: 100%;
+  background: #123b3d;
+  border-radius: 150px;
+  transition:
+    left 1.8s ease-in-out,
+    top 1.8s ease-in-out;
+}
+.auth__card.active .auth__toggle-surface {
+  left: 50%;
+}
+
+/* --- switch panels riding the surface (reference .toggle-panel) --- */
+.auth__toggle-panel {
+  position: absolute;
+  width: 50%;
+  height: 100%;
+  color: var(--color-text-primary);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  padding: var(--space-6);
+  z-index: 2;
+  pointer-events: auto;
+  transition: 0.6s ease-in-out;
+}
+.auth__toggle-panel--left {
+  left: 0;
+  transition-delay: 1.2s;
+}
+.auth__card.active .auth__toggle-panel--left {
+  left: -50%;
+  transition-delay: 0.6s;
+}
+.auth__toggle-panel--right {
+  right: -50%;
+  transition-delay: 0.6s;
+}
+.auth__card.active .auth__toggle-panel--right {
+  right: 0;
+  transition-delay: 1.2s;
+}
+
+.auth__toggle-panel .auth__brand {
+  background: var(--color-primary-soft);
+  border-color: var(--color-primary-border);
+}
+.auth__toggle-title {
+  font-family: var(--font-display);
+  font-size: var(--text-2xl);
+  font-weight: 800;
+  color: var(--color-text-primary);
+  margin-top: var(--space-4);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.auth__toggle-copy {
+  font-size: var(--text-sm);
+  color: var(--color-text-secondary);
+  opacity: 0.9;
+  margin-top: var(--space-3);
+  max-width: 18rem;
+}
+.auth__toggle-btn {
+  width: 100%;
+  max-width: 15rem;
+  margin-top: var(--space-5);
+  padding: var(--space-3) var(--space-5);
+  background: transparent;
+  border: 2px solid var(--color-primary);
+  border-radius: var(--radius-md);
+  color: var(--color-primary);
+  font-weight: 600;
+  font-size: var(--text-base);
+  cursor: pointer;
+  transition:
+    background-color var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+.auth__toggle-btn:hover {
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+}
+.auth__toggle-btn:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(224, 227, 229, 0.4);
 }
 .auth__heading {
   display: flex;
@@ -166,6 +331,89 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+
+/* ===== Auth transition — narrow / mobile (vertical sweep) =====
+   Ports the source mobile choreography: form panels stack full-width at
+   the bottom, the oversized surface sweeps top↔bottom, toggle panels
+   become 30%-height strips top/bottom. */
+@media screen and (max-width: 720px) {
+  .auth__card {
+    height: calc(100svh - 8rem);
+    max-width: 32rem;
+  }
+
+  .auth__form-box {
+    top: auto;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    height: 70%;
+    padding: var(--space-4);
+    transition:
+      bottom 0.6s ease-in-out 1.2s,
+      visibility 0s 1.2s;
+  }
+  .auth__card.active .auth__form-box {
+    bottom: 30%;
+  }
+
+  .auth__toggle-surface {
+    left: 0;
+    top: -270%;
+    width: 100%;
+    height: 300%;
+    border-radius: 4rem;
+  }
+  .auth__card.active .auth__toggle-surface {
+    top: 70%;
+  }
+
+  .auth__toggle-panel {
+    width: 100%;
+    height: 30%;
+    padding: var(--space-4);
+  }
+  .auth__toggle-panel--left {
+    left: 0;
+    top: 0;
+  }
+  .auth__card.active .auth__toggle-panel--left {
+    left: 0;
+    top: -30%;
+  }
+  .auth__toggle-panel--right {
+    right: 0;
+    bottom: -30%;
+  }
+  .auth__card.active .auth__toggle-panel--right {
+    bottom: 0;
+  }
+
+  .auth__toggle-title {
+    font-size: var(--text-xl);
+    margin-top: var(--space-2);
+  }
+  .auth__toggle-copy {
+    display: none;
+  }
+  .auth__toggle-btn {
+    width: auto;
+    margin-top: var(--space-3);
+  }
+}
+
+/* ===== Reduced motion =====
+   The global reduced-motion rule already zeroes transition durations;
+   neutralize the source's staggered delays so forms never sit in an
+   intermediate (partially moved) state. */
+@media (prefers-reduced-motion: reduce) {
+  .auth__form-box,
+  .auth__toggle-surface,
+  .auth__toggle-panel {
+    transition-delay: 0s !important;
+  }
 }
 
 /* ===== App shell (global) ===== */

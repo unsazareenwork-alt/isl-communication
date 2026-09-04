@@ -148,6 +148,29 @@
   border-color: var(--color-primary);
   box-shadow: var(--color-focus-ring);
 }
+
+/* Browser autofill (Chrome/Edge) paints a light fill layer over
+   autofilled inputs. An inset box-shadow spread beyond the element plus
+   -webkit-text-fill-color overrides that layer with the normal
+   Shiksha-Sanket input surface without touching autofill behavior. */
+.input:-webkit-autofill,
+.input:-webkit-autofill:hover,
+.input:-webkit-autofill:active,
+.input:autofill {
+  -webkit-box-shadow: 0 0 0 1000px var(--color-surface-2) inset;
+  box-shadow: 0 0 0 1000px var(--color-surface-2) inset;
+  -webkit-text-fill-color: var(--color-text-primary);
+  caret-color: var(--color-text-primary);
+  transition: background-color 9999s ease-out 0s;
+}
+/* Keep the focus ring visible while an autofilled input is focused. */
+.input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 1000px var(--color-surface-2) inset, var(--color-focus-ring);
+  box-shadow: 0 0 0 1000px var(--color-surface-2) inset, var(--color-focus-ring);
+  -webkit-text-fill-color: var(--color-text-primary);
+  caret-color: var(--color-text-primary);
+  transition: background-color 9999s ease-out 0s;
+}
 .input--invalid {
   border-color: var(--color-danger);
 }
