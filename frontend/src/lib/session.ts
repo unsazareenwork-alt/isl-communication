@@ -15,6 +15,7 @@ export interface RemoteTile {
   stream: MediaStream | null;
   cameraEnabled: boolean;
   micEnabled: boolean;
+  userId?: string;
 }
 
 export interface Participant extends RemoteTile {
@@ -84,6 +85,11 @@ const RTC_CONFIG: RTCConfiguration = {
 
 const STORAGE_KEY_CAMERA = "shiksha_sanket_selected_camera";
 const STORAGE_KEY_MIC = "shiksha_sanket_selected_microphone";
+
+// DEV-only WebRTC diagnostics master switch. Set to false to temporarily
+// disable the getStats sampler for regression isolation, keeping all other
+// WebRTC behavior unchanged.
+const DEV_STATS_ENABLED = false;
 
 // ===================== Device persistence =====================
 
@@ -202,8 +208,19 @@ function buildVideoConstraints(deviceId: string | null): MediaTrackConstraints {
   return { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } };
 }
 
-function buildAudioConstraints(deviceId: string | null): MediaTrackConstraints | boolean {
-  return deviceId ? { deviceId: { exact: deviceId } } : true;
+function buildAudioConstraints(deviceId: string | null): MediaTrackConstraints {
+  return deviceId
+    ? {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        deviceId: { exact: deviceId },
+      }
+    : {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      };
 }
 
 function friendlyMediaError(err: unknown): string {
@@ -234,6 +251,13 @@ export class MeetingSession {
   private participantNames = new Map<string, string>();
   /** socketId -> remote media state (camera/mic enabled). */
   private remoteMediaStates = new Map<string, MediaState>();
+
+  /** userId -> the remote socketId currently serving that user in THIS meeting. */
+  private activeRemoteByUserId = new Map<string, string>();
+  /** socketId -> userId (remote participants only; used for stale user-left guards). */
+  private userIdByRemoteSocket = new Map<string, string>();
+  /** Sockets we decided to ignore because they are copies of the local identity (multi-tab). */
+  private ignoredRemoteSockets = new Set<string>();
   private localSocketId: string | null = null;
   private destroyed = false;
 
@@ -250,6 +274,12 @@ export class MeetingSession {
   private deviceChangeHandler: (() => void) | null = null;
   /** userId -> displayName used to resolve chat/transcript sender names. */
   private namesById = new Map<string, string>();
+
+  /** DEV-only: per-peer diagnostic sampler state (socketId -> accumulator). */
+  private statsTimers = new Map<
+    string,
+    { timer: number; lastPairId: string | null; lastInBytes: number; lastOutBytes: number; lastTs: number }
+  >();
 
   constructor(config: SessionConfig, callbacks: SessionCallbacks) {
     this.config = config;
@@ -281,6 +311,94 @@ export class MeetingSession {
     if (userId) this.namesById.set(userId, userName);
   }
 
+  /**
+   * True when the given userId belongs to the person in THIS tab (the current
+   * session). A remote socket carrying this userId is a copy of the local
+   * identity (e.g. the same account opened in a second tab) and must not be
+   * shown as a participant or peered to.
+   */
+  private isSelfByUserId(userId: string | undefined): boolean {
+    return !!userId && userId === this.config.userId;
+  }
+
+  /**
+   * Reconcile a freshly-announced remote participant against what we already
+   * track for the same authenticated userId within this meeting.
+   *
+   * - userId matching the local identity  -> ignored (another tab of the user).
+   * - userId already mapped to a DIFFERENT active remote socket -> the newer
+   *   socket replaces/tears down the old one (prevents ghost duplicates).
+   *
+   * Returns false when the participant must be skipped entirely, true otherwise.
+   */
+  private reconcileRemoteParticipant(remoteSocketId: string, userId: string | undefined): boolean {
+    if (this.isSelfByUserId(userId)) {
+      // Same person in another tab: never peer with or display our own copy.
+      this.ignoredRemoteSockets.add(remoteSocketId);
+      if (import.meta.env.DEV) {
+        console.log(
+          "[DEDUP DEBUG] reconcile -> SELF duplicate (ignored)",
+          { remoteSocketId, userId, localUserId: this.config.userId },
+        );
+      }
+      return false;
+    }
+
+    this.ignoredRemoteSockets.delete(remoteSocketId);
+
+    if (userId) {
+      const prev = this.activeRemoteByUserId.get(userId);
+      if (prev && prev !== remoteSocketId) {
+        // Same user reconnected with a new socket: the newest wins, old is torn down.
+        this.takeDownRemote(prev);
+        if (import.meta.env.DEV) {
+          console.log(
+            "[DEDUP DEBUG] reconcile -> REMOTE duplicate (replace)",
+            { remoteSocketId, userId, replacedSocketId: prev },
+          );
+        }
+      } else {
+        if (import.meta.env.DEV) {
+          console.log("[DEDUP DEBUG] reconcile -> accepted (remote, no dup)", {
+            remoteSocketId,
+            userId,
+            localUserId: this.config.userId,
+          });
+        }
+      }
+      this.activeRemoteByUserId.set(userId, remoteSocketId);
+      this.userIdByRemoteSocket.set(remoteSocketId, userId);
+    } else {
+      if (import.meta.env.DEV) {
+        console.log("[DEDUP DEBUG] reconcile -> accepted (NO userId, cannot dedup)", {
+          remoteSocketId,
+          userId,
+          localUserId: this.config.userId,
+        });
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Fully remove one remote connection: close the RTCPeerConnection, drop its
+   * name/media/stats state and its map entries, and remove its React tile.
+   * Never touches the local connection.
+   */
+  private takeDownRemote(remoteSocketId: string) {
+    const userId = this.userIdByRemoteSocket.get(remoteSocketId);
+    this.removePeer(remoteSocketId);
+    this.participantNames.delete(remoteSocketId);
+    this.remoteMediaStates.delete(remoteSocketId);
+    this.ignoredRemoteSockets.delete(remoteSocketId);
+    if (userId && this.activeRemoteByUserId.get(userId) === remoteSocketId) {
+      this.activeRemoteByUserId.delete(userId);
+    }
+    this.userIdByRemoteSocket.delete(remoteSocketId);
+    this.cb.onParticipantLeft(remoteSocketId);
+    this.emitParticipantList();
+  }
+
   private attachSocketHandlers() {
     const s = this.socket;
 
@@ -295,9 +413,32 @@ export class MeetingSession {
     });
 
     s.on("existing-participants", (participants: ExistingParticipant[]) => {
+      if (import.meta.env.DEV) {
+        console.log("[DEDUP DEBUG] existing-participants list", {
+          localUserId: this.config.userId,
+          localSocketId: this.localSocketId,
+          list: participants.map((p) => ({
+            socketId: p.socketId,
+            userId: p.userId,
+            userName: p.userName,
+          })),
+        });
+      }
+      const accepted: string[] = [];
       participants.forEach((p) => {
-        this.participantNames.set(p.socketId, p.userName);
+        if (import.meta.env.DEV) {
+          console.log("[DEDUP DEBUG] existing-participants entry", {
+            event: "existing-participants",
+            localUserId: this.config.userId,
+            incomingUserId: p.userId,
+            incomingSocketId: p.socketId,
+            localSocketId: this.localSocketId,
+            isSameUser: p.userId !== undefined && p.userId === this.config.userId,
+          });
+        }
         this.trackNameById(p.userId, p.userName);
+        if (!this.reconcileRemoteParticipant(p.socketId, p.userId)) return;
+        this.participantNames.set(p.socketId, p.userName);
         if (p.cameraOn !== undefined && p.micOn !== undefined) {
           this.remoteMediaStates.set(p.socketId, {
             cameraEnabled: p.cameraOn,
@@ -311,15 +452,27 @@ export class MeetingSession {
           cameraEnabled: p.cameraOn,
           micEnabled: p.micOn,
         });
+        accepted.push(p.socketId);
       });
       this.emitSenderNames();
-      participants.forEach((p) => this.callUser(p.socketId, p.userName));
+      accepted.forEach((socketId) => this.callUser(socketId));
       this.emitParticipantList();
     });
 
     s.on("user-joined", (data: ParticipantInfo) => {
-      this.participantNames.set(data.socketId, data.userName);
+      if (import.meta.env.DEV) {
+        console.log("[DEDUP DEBUG] user-joined", {
+          event: "user-joined",
+          localUserId: this.config.userId,
+          incomingUserId: data.userId,
+          incomingSocketId: data.socketId,
+          localSocketId: this.localSocketId,
+          isSameUser: data.userId !== undefined && data.userId === this.config.userId,
+        });
+      }
       this.trackNameById(data.userId, data.userName);
+      if (!this.reconcileRemoteParticipant(data.socketId, data.userId)) return;
+      this.participantNames.set(data.socketId, data.userName);
       if (data.cameraEnabled !== undefined && data.micEnabled !== undefined) {
         this.remoteMediaStates.set(data.socketId, {
           cameraEnabled: data.cameraEnabled,
@@ -332,11 +485,11 @@ export class MeetingSession {
     });
 
     s.on("user-left", (data: { socketId: string; userName: string }) => {
-      this.removePeer(data.socketId);
-      this.participantNames.delete(data.socketId);
-      this.remoteMediaStates.delete(data.socketId);
-      this.cb.onParticipantLeft(data.socketId);
-      this.emitParticipantList();
+      // Guard: if this socket is no longer the active connection for its user,
+      // a stale user-left (for a replaced old socket) must not remove the newer one.
+      const userId = this.userIdByRemoteSocket.get(data.socketId);
+      if (userId && this.activeRemoteByUserId.get(userId) !== data.socketId) return;
+      this.takeDownRemote(data.socketId);
     });
 
     s.on("peer-media-toggle", (data: { socketId: string; cameraOn: boolean; micOn: boolean }) => {
@@ -715,6 +868,163 @@ export class MeetingSession {
     });
   }
 
+  // ===================== DEV WebRTC diagnostics =====================
+  // Temporary runtime instrumentation to diagnose participant-audio
+  // stuttering. Active only when import.meta.env.DEV is true; inert in
+  // production builds. Does NOT modify tracks, senders, receivers, bitrate,
+  // or network configuration.
+
+  private startPeerStats(remoteSocketId: string) {
+    if (!DEV_STATS_ENABLED) return;
+    if (!import.meta.env.DEV) return;
+    if (this.statsTimers.has(remoteSocketId)) return;
+    const pc = this.peers.get(remoteSocketId);
+    if (!pc) return;
+
+    const state = {
+      timer: 0,
+      lastPairId: null as string | null,
+      lastInBytes: 0,
+      lastOutBytes: 0,
+      lastTs: 0,
+    };
+
+    const sample = () => {
+      void pc.getStats().then((report) => {
+        const now = performance.now();
+        if (state.lastTs === 0) state.lastTs = now;
+
+        // Transport / candidate-pair
+        let pairId: string | null = null;
+        let currentRoundTripTime: number | null = null;
+        let availableOutgoingBitrate: number | null = null;
+        let requestsSent: number | null = null;
+        let responsesReceived: number | null = null;
+        for (const stats of report.values()) {
+          if (stats.type === "transport") {
+            const st = stats as RTCStats & { selectedCandidatePairId?: string };
+            pairId = st.selectedCandidatePairId ?? null;
+          } else if (stats.type === "candidate-pair") {
+            const cp = stats as RTCStats &
+              RTCIceCandidatePairStats & { selected?: boolean; currentRoundTripTime?: number; availableOutgoingBitrate?: number; requestsSent?: number; responsesReceived?: number };
+            if (cp.selected) {
+              if (state.lastPairId !== null && pairId !== null && pairId !== state.lastPairId) {
+                console.info("[WebRTC STATS] Candidate pair changed", {
+                  from: state.lastPairId,
+                  to: pairId,
+                  socketId: remoteSocketId.slice(-6),
+                });
+              }
+              state.lastPairId = pairId;
+              currentRoundTripTime = cp.currentRoundTripTime ?? null;
+              availableOutgoingBitrate = cp.availableOutgoingBitrate ?? null;
+              requestsSent = cp.requestsSent ?? null;
+              responsesReceived = cp.responsesReceived ?? null;
+            }
+          }
+        }
+
+        // Inbound (audio) + Outbound (audio) + codec
+        let inAudio: Record<string, unknown> | null = null;
+        let outAudio: Record<string, unknown> | null = null;
+        const codecs = new Map<string, { mimeType?: string; clockRate?: number; channels?: number; sdpFmtpLine?: string }>();
+        for (const stats of report.values()) {
+          if (stats.type === "codec") {
+            const c = stats as RTCStats & { mimeType?: string; clockRate?: number; channels?: number; sdpFmtpLine?: string };
+            codecs.set(c.id, { mimeType: c.mimeType, clockRate: c.clockRate, channels: c.channels, sdpFmtpLine: c.sdpFmtpLine });
+          } else if (stats.type === "inbound-rtp") {
+            const ir = stats as RTCInboundRtpStreamStats;
+            if (ir.kind === "audio") inAudio = { ...stats };
+          } else if (stats.type === "outbound-rtp") {
+            const or = stats as RTCOutboundRtpStreamStats;
+            if (or.kind === "audio") outAudio = { ...stats };
+          }
+        }
+
+        // Inbound derived values
+        const inPacketsReceived = (inAudio?.packetsReceived as number) ?? 0;
+        const inPacketsLost = (inAudio?.packetsLost as number) ?? 0;
+        const inBytesReceived = (inAudio?.bytesReceived as number) ?? 0;
+        const lossPercent =
+          inPacketsReceived + inPacketsLost > 0
+            ? ((inPacketsLost / (inPacketsReceived + inPacketsLost)) * 100).toFixed(2)
+            : "0.00";
+
+        // Outbound bitrate from byte delta
+        const outBytesSent = (outAudio?.bytesSent as number) ?? 0;
+        let outBitrate = 0;
+        const dtMs = now - state.lastTs;
+        if (state.lastOutBytes > 0 && dtMs > 0) {
+          outBitrate = Math.round(((outBytesSent - state.lastOutBytes) * 8) / (dtMs / 1000));
+        }
+        state.lastOutBytes = outBytesSent;
+
+        // Inbound bitrate from byte delta
+        const byteDeltaIn = inBytesReceived - state.lastInBytes;
+        let inBitrate = 0;
+        if (state.lastInBytes > 0 && dtMs > 0) {
+          inBitrate = Math.round((byteDeltaIn * 8) / (dtMs / 1000));
+        }
+        state.lastInBytes = inBytesReceived;
+        state.lastTs = now;
+
+        const inCodec = inAudio?.codecId ? codecs.get(inAudio.codecId as string) : undefined;
+        const outCodec = outAudio?.codecId ? codecs.get(outAudio.codecId as string) : undefined;
+
+        console.debug("[WebRTC STATS]", {
+          peer: remoteSocketId.slice(-6),
+          connState: pc.connectionState,
+          iceConnectionState: pc.iceConnectionState,
+          iceGatheringState: pc.iceGatheringState,
+          pairId: pairId?.slice(-6) ?? null,
+          rttMs: currentRoundTripTime !== null ? Math.round(currentRoundTripTime * 1000) : null,
+          availableOutgoingBitrate: availableOutgoingBitrate ?? null,
+          reqSent: requestsSent ?? null,
+          respReceived: responsesReceived ?? null,
+          inboundAudio: inAudio
+            ? {
+                packetsReceived: inPacketsReceived,
+                packetsLost: inPacketsLost,
+                lossPercent,
+                jitter: inAudio.jitter ?? null,
+                jitterBufferDelay: inAudio.jitterBufferDelay ?? null,
+                jitterBufferEmittedCount: inAudio.jitterBufferEmittedCount ?? null,
+                concealedSamples: inAudio.concealedSamples ?? null,
+                silentConcealedSamples: inAudio.silentConcealedSamples ?? null,
+                totalSamplesReceived: inAudio.totalSamplesReceived ?? null,
+                bytesReceived: inBytesReceived,
+                bitrate: inBitrate,
+                audioLevel: inAudio.audioLevel ?? null,
+                codec: inCodec,
+              }
+            : null,
+          outboundAudio: outAudio
+            ? {
+                packetsSent: outAudio.packetsSent ?? null,
+                bytesSent: outBytesSent,
+                retransmittedPacketsSent: outAudio.retransmittedPacketsSent ?? null,
+                bitrate: outBitrate,
+                codec: outCodec,
+              }
+            : null,
+        });
+      });
+    };
+
+    state.timer = window.setInterval(sample, 1000);
+    // Fire once immediately for a baseline.
+    sample();
+    this.statsTimers.set(remoteSocketId, state);
+  }
+
+  private stopPeerStats(remoteSocketId: string) {
+    const s = this.statsTimers.get(remoteSocketId);
+    if (s) {
+      window.clearInterval(s.timer);
+      this.statsTimers.delete(remoteSocketId);
+    }
+  }
+
   private createPeerConnection(remoteSocketId: string): RTCPeerConnection {
     const pc = new RTCPeerConnection(RTC_CONFIG);
 
@@ -736,22 +1046,23 @@ export class MeetingSession {
     pc.onconnectionstatechange = () => {
       const state = pc.connectionState;
       if (state === "failed" || state === "closed") {
-        this.removePeer(remoteSocketId);
-        this.participantNames.delete(remoteSocketId);
-        this.cb.onParticipantLeft(remoteSocketId);
-        this.emitParticipantList();
+        this.takeDownRemote(remoteSocketId);
       }
     };
 
     this.peers.set(remoteSocketId, pc);
+    this.startPeerStats(remoteSocketId);
     return pc;
   }
 
-  private async callUser(remoteSocketId: string, remoteUserName: string) {
+  /**
+   * Establish the WebRTC offer toward an already-registered remote participant.
+   * The participant tile/state is created by the user-joined/existing-participants
+   * announcement (with full userId info); this method only sets up the connection.
+   */
+  private async callUser(remoteSocketId: string) {
     if (this.peers.has(remoteSocketId)) return;
-    this.participantNames.set(remoteSocketId, remoteUserName);
-    this.cb.onParticipantJoined({ socketId: remoteSocketId, userName: remoteUserName });
-    this.emitParticipantList();
+    if (this.ignoredRemoteSockets.has(remoteSocketId)) return;
 
     const pc = this.createPeerConnection(remoteSocketId);
     try {
@@ -765,6 +1076,7 @@ export class MeetingSession {
 
   private async handleOffer(from: string, offer: RTCSessionDescriptionInit) {
     if (from === this.localSocketId) return;
+    if (this.ignoredRemoteSockets.has(from)) return;
     if (this.peers.has(from)) return;
 
     const pc = this.createPeerConnection(from);
@@ -779,6 +1091,7 @@ export class MeetingSession {
   }
 
   private removePeer(socketId: string) {
+    this.stopPeerStats(socketId);
     const pc = this.peers.get(socketId);
     if (pc) {
       pc.onicecandidate = null;
@@ -868,8 +1181,15 @@ export class MeetingSession {
       pc.ontrack = null;
       pc.close();
     }
+    for (const socketId of [...this.statsTimers.keys()]) {
+      this.stopPeerStats(socketId);
+    }
     this.peers.clear();
     this.participantNames.clear();
+    this.remoteMediaStates.clear();
+    this.activeRemoteByUserId.clear();
+    this.userIdByRemoteSocket.clear();
+    this.ignoredRemoteSockets.clear();
 
     if (this.localStream) {
       this.localStream.getTracks().forEach((t) => {

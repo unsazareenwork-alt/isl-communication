@@ -44,6 +44,13 @@ export function useMeetingSession({
 
   const sessionRef = useRef<MeetingSession | null>(null);
   const tilesRef = useRef<Record<string, RemoteTile>>({});
+  /**
+   * userId -> the socketId that currently owns that remote identity in this
+   * meeting. Used so that when the same user reconnects with a new socket, the
+   * old tile is dropped first (newest wins) and a stale user-left for the old
+   * socket never removes the new one.
+   */
+  const activeSocketByUserIdRef = useRef<Map<string, string>>(new Map());
   const seenMessageIds = useRef<Set<string>>(new Set());
   const seenCaptionIds = useRef<Set<string>>(new Set());
   const isJoiningRef = useRef(false);
@@ -64,14 +71,18 @@ export function useMeetingSession({
         onMediaError: (message) => setMediaError(message),
         onParticipantList: (list: Participant[]) => {
           const next = { ...tilesRef.current };
+          activeSocketByUserIdRef.current.clear();
           for (const t of list) {
+            if (t.socketId === localSocketIdRef.current) continue;
             const existing = next[t.socketId];
+            if (t.userId) activeSocketByUserIdRef.current.set(t.userId, t.socketId);
             next[t.socketId] = {
               socketId: t.socketId,
               userName: t.userName,
               stream: existing?.stream ?? null,
               cameraEnabled: t.cameraEnabled,
               micEnabled: t.micEnabled,
+              userId: t.userId,
             };
           }
           for (const id of Object.keys(next)) {
@@ -83,21 +94,36 @@ export function useMeetingSession({
           setTiles(next);
         },
         onParticipantJoined: (p: ParticipantInfo) => {
-          tilesRef.current = {
-            ...tilesRef.current,
-            [p.socketId]: {
-              socketId: p.socketId,
-              userName: p.userName,
-              stream: null,
-              cameraEnabled: p.cameraEnabled ?? true,
-              micEnabled: p.micEnabled ?? true,
-            },
+          if (p.socketId === localSocketIdRef.current) return;
+          const next = { ...tilesRef.current };
+          const uid = p.userId;
+          if (uid) {
+            const prev = activeSocketByUserIdRef.current.get(uid);
+            if (prev && prev !== p.socketId && next[prev]) {
+              delete next[prev];
+            }
+            activeSocketByUserIdRef.current.set(uid, p.socketId);
+          }
+          next[p.socketId] = {
+            socketId: p.socketId,
+            userName: p.userName,
+            stream: next[p.socketId]?.stream ?? null,
+            cameraEnabled: p.cameraEnabled ?? true,
+            micEnabled: p.micEnabled ?? true,
+            userId: p.userId,
           };
-          setTiles(tilesRef.current);
+          tilesRef.current = next;
+          setTiles(next);
         },
         onParticipantLeft: (socketId) => {
           const next = { ...tilesRef.current };
           delete next[socketId];
+          for (const [uid, sid] of activeSocketByUserIdRef.current) {
+            if (sid === socketId) {
+              activeSocketByUserIdRef.current.delete(uid);
+              break;
+            }
+          }
           tilesRef.current = next;
           setTiles(next);
         },

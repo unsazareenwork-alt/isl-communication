@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { FormEvent } from "react";
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 import { Envelope, Lock, User, ArrowRight } from "@phosphor-icons/react";
 import { Button } from "../ui/Button";
 import { Field } from "../ui/Field";
@@ -11,7 +11,7 @@ type Mode = "login" | "signup";
 
 interface AuthFormProps {
   mode: Mode;
-  onSubmit: (email: string, password: string, name?: string) => Promise<void>;
+  onSubmit: (email: string, password: string, name?: string, remember?: boolean) => Promise<void>;
 }
 
 function validate(email: string, password: string, name?: string, mode?: Mode): Record<string, string> {
@@ -39,6 +39,8 @@ export function AuthForm({ mode, onSubmit }: AuthFormProps) {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [formError, setFormError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [remember, setRemember] = useState(false);
+  const location = useLocation();
 
   const isLogin = mode === "login";
 
@@ -53,7 +55,7 @@ export function AuthForm({ mode, onSubmit }: AuthFormProps) {
     setLoading(true);
     try {
       if (isLogin) {
-        await onSubmit(email.trim(), password);
+        await onSubmit(email.trim(), password, undefined, remember);
       } else {
         await onSubmit(email.trim(), password, name.trim());
       }
@@ -128,6 +130,18 @@ export function AuthForm({ mode, onSubmit }: AuthFormProps) {
         </div>
       </Field>
 
+      {isLogin && (
+        <label className="auth__remember">
+          <input
+            type="checkbox"
+            className="auth__remember-input"
+            checked={remember}
+            onChange={(e) => setRemember(e.target.checked)}
+          />
+          <span className="auth__remember-label">Remember me</span>
+        </label>
+      )}
+
       <Button type="submit" variant="primary" size="lg" loading={loading} className="auth__submit">
         {isLogin ? "Sign in" : "Create account"}
         {!loading && <ArrowRight size={18} weight="bold" aria-hidden="true" />}
@@ -137,7 +151,7 @@ export function AuthForm({ mode, onSubmit }: AuthFormProps) {
         {isLogin ? (
           <>
             New here?{" "}
-            <Link to="/signup" className="auth__link">
+            <Link to="/signup" state={location.state} className="auth__link">
               Create an account
             </Link>
           </>
