@@ -432,6 +432,11 @@
 }
 
 /* ===== Lobby ===== */
+.lobby {
+  position: relative;
+  overflow: clip;
+}
+
 .lobby__header {
   position: sticky;
   top: 0;
