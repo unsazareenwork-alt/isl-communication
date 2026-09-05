@@ -267,6 +267,8 @@ export class MeetingSession {
   private readyToJoin = false;
   /** True while the pre-join preview screen is showing; media is acquired only via startPreview. */
   private preJoinActive = true;
+  /** Incremented on every toggleCamera() so an in-flight camera re-acquisition can be aborted. */
+  private toggleCameraSeq = 0;
 
   private availableDevices: DeviceInfo[] = [];
   private selectedCameraId: string | null = null;
@@ -747,6 +749,7 @@ export class MeetingSession {
       saveCameraPref(deviceId);
 
       if (this.joined) this.replaceTracksOnAllPeers(this.localStream);
+      this.replaceLocalVideoOnPeers(this.localStream?.getVideoTracks()[0] ?? null);
 
       this.cb.onLocalStream(this.localStream);
       this.cb.onMediaState(this.getActualMediaState());
@@ -835,6 +838,7 @@ export class MeetingSession {
       this.cb.onMediaState(this.getActualMediaState());
       this.bindTrackEnded(stream);
       this.replaceTracksOnAllPeers(stream);
+      this.replaceLocalVideoOnPeers(stream.getVideoTracks()[0] ?? null);
       this.broadcastMediaState();
       return stream;
     } catch (err) {
@@ -854,6 +858,24 @@ export class MeetingSession {
         } else if (sender.track?.kind === "audio") {
           const newAudio = newStream.getAudioTracks()[0];
           if (newAudio) sender.replaceTrack(newAudio);
+        }
+      }
+    }
+  }
+
+  /**
+   * Replace the local video on every peer's video sender (including senders
+   * whose track is currently null, e.g. while the camera is off). Passing
+   * null mutes the m-line without stopping transmission; a live track resumes
+   * it. No SDP renegotiation is required for track swaps.
+   */
+  private replaceLocalVideoOnPeers(track: MediaStreamTrack | null) {
+    for (const [, pc] of this.peers) {
+      for (const transceiver of pc.getTransceivers()) {
+        if (transceiver.receiver?.track?.kind !== "video") continue;
+        const dir = transceiver.direction;
+        if (dir === "sendonly" || dir === "sendrecv") {
+          void transceiver.sender.replaceTrack(track).catch(() => {});
         }
       }
     }
@@ -1030,6 +1052,12 @@ export class MeetingSession {
 
     if (this.localStream) {
       this.localStream.getTracks().forEach((track) => pc.addTrack(track, this.localStream!));
+      // When the camera is off there is no live video track to add. Reserve a
+      // sendonly video sender so a later camera-on can attach the track via
+      // replaceTrack without requiring a renegotiation.
+      if (!this.localStream.getVideoTracks()[0]) {
+        pc.addTransceiver("video", { direction: "sendonly" });
+      }
     }
 
     pc.onicecandidate = (event) => {
@@ -1140,15 +1168,72 @@ export class MeetingSession {
     return state.micEnabled;
   }
 
-  toggleCamera() {
-    if (this.localStream) {
-      const videoTrack = this.localStream.getVideoTracks()[0];
-      if (videoTrack) videoTrack.enabled = !videoTrack.enabled;
+  /**
+   * Toggle the camera on/off. Turning the camera OFF fully releases the
+   * physical device: the live video track is stopped (indicator turns off)
+   * and every peer's video sender is muted via replaceTrack(null). Turning it
+   * ON re-acquires the device with the selected camera and attaches the fresh
+   * track to every peer's video sender. Audio tracks are never touched.
+   * Returns the resulting cameraEnabled state.
+   */
+  async toggleCamera(): Promise<boolean> {
+    if (this.destroyed) return false;
+
+    const videoTrack = this.localStream?.getVideoTracks()[0];
+    const isOn = videoTrack ? videoTrack.enabled && videoTrack.readyState === "live" : false;
+
+    if (isOn && this.localStream) {
+      // Camera OFF: stop and remove the track so the device is released, then
+      // mute the outgoing video on every peer (no renegotiation needed).
+      ++this.toggleCameraSeq;
+      this.localStream.removeTrack(videoTrack!);
+      videoTrack!.stop();
+      videoTrack!.enabled = false;
+      this.replaceLocalVideoOnPeers(null);
+      const state = this.getActualMediaState();
+      this.cb.onMediaState(state);
+      if (this.joined) this.broadcastMediaState();
+      return state.cameraEnabled;
     }
-    const state = this.getActualMediaState();
-    this.cb.onMediaState(state);
-    this.broadcastMediaState();
-    return state.cameraEnabled;
+
+    // Camera ON: re-acquire the device.
+    const seq = ++this.toggleCameraSeq;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: buildVideoConstraints(this.selectedCameraId),
+        audio: false,
+      });
+      // Abort if the session was torn down or a newer toggle superseded this one.
+      if (this.destroyed || seq !== this.toggleCameraSeq) {
+        stream.getTracks().forEach((t) => t.stop());
+        if (this.destroyed) return false;
+        return this.getActualMediaState().cameraEnabled;
+      }
+      const newVideoTrack = stream.getVideoTracks()[0];
+      if (!newVideoTrack) {
+        stream.getTracks().forEach((t) => t.stop());
+        this.cb.onMediaError("No camera available.");
+        return false;
+      }
+      stream.getTracks().forEach((t) => {
+        if (t !== newVideoTrack) t.stop();
+      });
+      newVideoTrack.enabled = true;
+      if (this.localStream) {
+        this.localStream.addTrack(newVideoTrack);
+      } else {
+        this.localStream = stream;
+      }
+      this.replaceLocalVideoOnPeers(newVideoTrack);
+      this.cb.onLocalStream(this.localStream);
+      this.cb.onMediaState(this.getActualMediaState());
+      this.bindTrackEnded(this.localStream);
+      if (this.joined) this.broadcastMediaState();
+      return true;
+    } catch (err) {
+      this.cb.onMediaError(friendlyMediaError(err));
+      return false;
+    }
   }
 
   // ===================== Cleanup =====================

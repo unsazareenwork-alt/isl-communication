@@ -231,8 +231,8 @@ export function useMeetingSession({
     sessionRef.current?.toggleMic();
   }, []);
 
-  const toggleCamera = useCallback(() => {
-    sessionRef.current?.toggleCamera();
+  const toggleCamera = useCallback(async () => {
+    await sessionRef.current?.toggleCamera();
   }, []);
 
   const leaveRoom = useCallback(() => {
