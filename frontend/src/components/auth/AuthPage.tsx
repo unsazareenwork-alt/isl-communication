@@ -1,4 +1,3 @@
-import { useEffect } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { Logo } from "../ui/Logo";
 import { AuthForm } from "./AuthForm";
@@ -32,59 +31,6 @@ export function AuthPage() {
 
   const active = location.pathname === "/signup";
 
-  // ── mouse-following ambient glow ────────────────────────────────────
-  // Lightweight rAF + lerp loop that writes to CSS custom properties
-  // on a dedicated element.  Zero React re-renders on mouse move.
-  useEffect(() => {
-    const prefersReduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const hasPointerHover = matchMedia("(hover: hover) and (pointer: fine)").matches;
-    if (!hasPointerHover) return;
-
-    const el = document.querySelector<HTMLElement>(".auth__cursor-glow");
-    if (!el) return;
-
-    let curX = window.innerWidth / 2;
-    let curY = window.innerHeight / 2;
-    let tgtX = curX;
-    let tgtY = curY;
-    let raf = 0;
-    let last = performance.now();
-    const FOLLOW_MS = 80;
-
-    el.style.setProperty("--mx", `${curX}px`);
-    el.style.setProperty("--my", `${curY}px`);
-
-    const tick = (now: number) => {
-      const dt = Math.min(now - last, 100);
-      last = now;
-      if (prefersReduced) {
-        curX = tgtX;
-        curY = tgtY;
-      } else {
-        // frame-rate independent exponential follow, ~450ms time constant
-        const ease = 1 - Math.exp(-dt / FOLLOW_MS);
-        curX += (tgtX - curX) * ease;
-        curY += (tgtY - curY) * ease;
-      }
-      el.style.setProperty("--mx", `${curX}px`);
-      el.style.setProperty("--my", `${curY}px`);
-      raf = requestAnimationFrame(tick);
-    };
-
-    const onMove = (e: PointerEvent) => {
-      tgtX = e.clientX;
-      tgtY = e.clientY;
-    };
-
-    raf = requestAnimationFrame(tick);
-    window.addEventListener("pointermove", onMove, { passive: true });
-
-    return () => {
-      cancelAnimationFrame(raf);
-      window.removeEventListener("pointermove", onMove);
-    };
-  }, []);
-
   if (isAuthenticated) {
     return <Navigate to={from} replace />;
   }
@@ -92,10 +38,9 @@ export function AuthPage() {
   const go = (path: string) => navigate(path, { state: location.state });
 
   return (
-    <div className="auth pathway-lines">
+    <div className="auth">
       <div className="auth__glow auth__glow--1" aria-hidden="true" />
       <div className="auth__glow auth__glow--2" aria-hidden="true" />
-      <div className="auth__cursor-glow" aria-hidden="true" />
 
       <div className={active ? "auth__card active" : "auth__card"}>
         {/* login form panel — right half by default, slides to the left half */}

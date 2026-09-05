@@ -4,7 +4,7 @@ import { Logo } from "../ui/Logo";
 
 export function AuthLayout({ children }: { children: ReactNode }) {
   return (
-    <div className="auth pathway-lines">
+    <div className="auth">
       <div className="auth__glow auth__glow--1" aria-hidden="true" />
       <div className="auth__glow auth__glow--2" aria-hidden="true" />
 

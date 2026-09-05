@@ -9,7 +9,6 @@
   padding: var(--space-8) var(--space-6);
   position: relative;
   overflow: hidden;
-  background: var(--color-bg);
 }
 .auth::before {
   content: "";
@@ -40,20 +39,27 @@
   height: 26rem;
   background: rgba(3, 0, 76, 0.22);
 }
-.auth__cursor-glow {
-  position: absolute;
+/* ===== Global mouse-following ambient glow =====
+   Shared by every non-meeting page (Login, Signup, Lobby, etc.).
+   Ported 1:1 from the original `.auth__cursor-glow`.  Fixed so it anchors
+   to the viewport instead of the document (no scroll-induced drift), and
+   clipped by its own `overflow: hidden` so its blur can never widen the
+   scroll area.  `z-index: 0` keeps it beneath all page content, which is
+   always mounted in positioned wrappers stacked above it. */
+.ambient-glow {
+  position: fixed;
   inset: 0;
   pointer-events: none;
   z-index: 0;
   overflow: hidden;
 }
-.auth__cursor-glow::after {
+.ambient-glow::after {
   content: "";
   position: absolute;
   width: 28rem;
   height: 28rem;
-  top: var(--my, 50%);
-  left: var(--mx, 50%);
+  top: var(--ambient-y, 50%);
+  left: var(--ambient-x, 50%);
   transform: translate(-50%, -50%);
   background: radial-gradient(
     circle,
@@ -421,7 +427,6 @@
   min-height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--color-bg);
 }
 
 .container {
@@ -480,8 +485,7 @@
   inset: 0;
   pointer-events: none;
   background:
-    radial-gradient(50% 45% at 50% 40%, rgba(79, 219, 200, 0.05), transparent 65%),
-    var(--color-bg);
+    radial-gradient(50% 45% at 50% 40%, rgba(79, 219, 200, 0.05), transparent 65%);
 }
 .lobby__glow {
   position: absolute;
@@ -713,7 +717,6 @@
   min-height: 100%;
   display: flex;
   flex-direction: column;
-  background: var(--color-bg);
   color: var(--color-text-primary);
   position: relative;
   overflow: hidden;
