@@ -59,6 +59,29 @@ router.post('/join/:code', authMiddleware, async (req, res) => {
     return res.status(404).json({ error: 'Meeting not found or not active' });
   }
 
+  // Avoid creating a duplicate "active" participant row if this user already
+  // has one for this meeting (e.g. rejoining, a retry, or a second tab before
+  // the previous session was cleaned up). Without this check, the leave
+  // endpoint can later match multiple rows and fail.
+  const { data: existingParticipant, error: existingError } = await supabase
+    .from('meeting_participants')
+    .select('*')
+    .eq('meeting_id', meeting.id)
+    .eq('user_id', userId)
+    .is('left_at', null)
+    .maybeSingle();
+
+  if (existingError) {
+    console.error('Join meeting lookup error:', existingError.message);
+    return res.status(500).json({ error: 'Failed to join meeting. Please try again.' });
+  }
+
+  if (existingParticipant) {
+    // Already an active participant — return the existing row instead of
+    // inserting a duplicate.
+    return res.status(200).json({ message: 'Already in meeting', meeting, participant: existingParticipant });
+  }
+
   const { data: participant, error: joinError } = await supabase
     .from('meeting_participants')
     .insert([{ meeting_id: meeting.id, user_id: userId }])
@@ -82,21 +105,25 @@ router.post('/leave/:id', authMiddleware, async (req, res) => {
     return res.status(400).json({ error: 'id must be a valid meeting UUID' });
   }
 
+  // Defensive: use .select() (array) instead of .maybeSingle()/.single() here.
+  // If more than one active row exists for this user in this meeting (e.g.
+  // from duplicate joins before the /join fix above was in place), this
+  // updates and returns all of them instead of throwing a "multiple rows"
+  // error.
   const { data, error } = await supabase
     .from('meeting_participants')
     .update({ left_at: new Date().toISOString() })
     .eq('meeting_id', id)
     .eq('user_id', userId)
     .is('left_at', null)
-    .select()
-    .maybeSingle();
+    .select();
 
   if (error) {
     console.error('Leave meeting error:', error.message);
     return res.status(500).json({ error: 'Failed to update leave status. Please try again.' });
   }
 
-  if (!data) {
+  if (!data || data.length === 0) {
     return res.status(404).json({ error: 'No active participation found for this user in this meeting' });
   }
 
@@ -111,7 +138,7 @@ router.post('/leave/:id', authMiddleware, async (req, res) => {
     });
   }
 
-  res.status(200).json({ message: 'Left meeting', participant: data });
+  res.status(200).json({ message: 'Left meeting', participant: data[0] });
 });
 
 // POST /api/meetings/end/:id
