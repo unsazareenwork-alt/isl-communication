@@ -21,7 +21,7 @@ from backend_client import BackendClient
 # ============================================================
 
 HOST = "0.0.0.0"
-PORT = 8765
+PORT = int(os.environ.get("PORT", 8765))
 
 # ============================================================
 # MODEL PATHS
