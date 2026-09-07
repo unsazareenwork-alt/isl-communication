@@ -3,6 +3,8 @@ import { MeetingSession } from "../lib/session";
 import type { DeviceInfo, Participant, ParticipantInfo, RemoteTile } from "../lib/session";
 import type { Message } from "../lib/types";
 
+const CAPTION_TIMEOUT_MS = 5000;
+
 export interface MeetingSessionConfig {
   meetingCode: string;
   meetingId: string;
@@ -53,6 +55,7 @@ export function useMeetingSession({
   const activeSocketByUserIdRef = useRef<Map<string, string>>(new Map());
   const seenMessageIds = useRef<Set<string>>(new Set());
   const seenCaptionIds = useRef<Set<string>>(new Set());
+  const captionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isJoiningRef = useRef(false);
 
   useEffect(() => {
@@ -164,21 +167,31 @@ export function useMeetingSession({
           if (seenCaptionIds.current.has(message.id)) return;
           seenCaptionIds.current.add(message.id);
           const resolved = sessionRef.current?.resolveSenderName(message.sender_id);
+          const backendName = message.sender_name?.trim();
+          const captionUserName =
+            backendName && backendName !== "Participant" && backendName !== "Anonymous"
+              ? backendName
+              : (resolved ?? backendName ?? "");
           setCaptions((prev) =>
             [
               ...prev,
               {
                 id: message.id,
-                userName:
-                  message.sender_name && message.sender_name !== "Participant"
-                    ? message.sender_name
-                    : (resolved ?? message.sender_name ?? ""),
+                userName: captionUserName,
                 original: message.original_text,
                 translated: message.translated_text,
                 timestamp: Date.now(),
               },
             ].slice(-4),
           );
+
+          // Reset the inactivity timeout so rapid predictions keep the
+          // caption visible. Only the freshest timer can clear captions.
+          if (captionTimerRef.current) clearTimeout(captionTimerRef.current);
+          captionTimerRef.current = setTimeout(() => {
+            captionTimerRef.current = null;
+            setCaptions([]);
+          }, CAPTION_TIMEOUT_MS);
         },
         onDisconnected: () => setDisconnected(true),
         onMeetingEnded: () => setMeetingEnded(true),
@@ -195,6 +208,10 @@ export function useMeetingSession({
     sessionRef.current = session;
 
     return () => {
+      if (captionTimerRef.current) {
+        clearTimeout(captionTimerRef.current);
+        captionTimerRef.current = null;
+      }
       session.destroy();
       sessionRef.current = null;
     };

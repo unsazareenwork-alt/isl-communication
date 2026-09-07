@@ -24,7 +24,8 @@ function senderName(m: Message, currentUserId: string, currentUserName: string, 
   if (m.sender_id === currentUserId) return currentUserName || "You";
   const resolved = senderNames[m.sender_id];
   if (resolved) return resolved;
-  if (m.sender_name && m.sender_name.trim() && m.sender_name !== "Participant") return m.sender_name;
+  const backendName = m.sender_name?.trim();
+  if (backendName && backendName !== "Participant" && backendName !== "Anonymous") return backendName;
   return "Participant";
 }
 
