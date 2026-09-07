@@ -5,7 +5,7 @@ import requests
 # BACKEND CONFIGURATION
 # ==========================================
 
-BACKEND_URL = "http://192.168.1.42:5000/api"
+BACKEND_URL = "https://isl-communication.onrender.com/api"
 
 EMAIL = "abc123@gmail.com"
 
@@ -377,22 +377,19 @@ if __name__ == "__main__":
 
     client = BackendClient()
 
-
     if not client.login():
-
         raise SystemExit
 
-
-    if not client.create_meeting():
-
-        raise SystemExit
-
+    # Use the meeting already created earlier
+    client.meeting_id = "f1704e58-3409-4b32-9f15-0b33ab618d9a"
+    
+    print("\nUsing existing meeting:")
+    print(client.meeting_id)
 
     client.send_prediction(
         sign="H",
         confidence=0.97
     )
-
 
     client.send_word(
         word="HELLO"
