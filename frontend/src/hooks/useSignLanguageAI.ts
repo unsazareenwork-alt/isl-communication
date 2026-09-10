@@ -4,7 +4,9 @@ const FRAME_INTERVAL_MS = 200;
 const FRAME_WIDTH = 640;
 const FRAME_HEIGHT = 480;
 const JPEG_QUALITY = 0.65;
-const AI_WS_URL = import.meta.env.DEV ? "ws://127.0.0.1:8765" : "wss://isl-ai-server.onrender.com";
+const AI_WS_URL =
+  (import.meta.env.VITE_AI_WS_URL as string | undefined) ||
+  (import.meta.env.DEV ? "ws://127.0.0.1:8765" : "wss://isl-ai-server.onrender.com");
 
 const MAX_RETRIES = 3;
 const RECONNECT_DELAYS_MS = [2000, 4000, 8000];

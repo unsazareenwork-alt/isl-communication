@@ -39,11 +39,12 @@ export function MeetingRoom({ meetingId, meetingCode, isHost, onExited, session 
   const [language, setLanguage] = useState<DisplayLanguage>("en");
   const [actionError, setActionError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [detectionEnabled, setDetectionEnabled] = useState(false);
 
   const { aiSentence, detectedWord, reset: resetAi } = useSignLanguageAI({
     stream: session.localStream,
     meetingId,
-    enabled: session.cameraEnabled,
+    enabled: detectionEnabled && session.cameraEnabled,
   });
 
   const participantCount = session.participants.length;
@@ -318,6 +319,8 @@ export function MeetingRoom({ meetingId, meetingCode, isHost, onExited, session 
           cameraEnabled={session.cameraEnabled}
           onToggleMic={session.toggleMic}
           onToggleCamera={session.toggleCamera}
+          detectionEnabled={detectionEnabled}
+          onToggleDetection={() => setDetectionEnabled((v) => !v)}
           activePanel={activePanel}
           onOpenPanel={openPanel}
           language={language}

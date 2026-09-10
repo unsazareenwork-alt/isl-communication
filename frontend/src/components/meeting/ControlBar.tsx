@@ -9,6 +9,7 @@ import {
   CaretDown,
   PhoneSlash,
   Square,
+  HandPalm,
 } from "@phosphor-icons/react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { DisplayLanguage } from "../../lib/types";
@@ -21,6 +22,8 @@ interface ControlBarProps {
   cameraEnabled: boolean;
   onToggleMic: () => void;
   onToggleCamera: () => void;
+  detectionEnabled: boolean;
+  onToggleDetection: () => void;
   activePanel: "chat" | "participants" | "transcript" | null;
   onOpenPanel: (panel: "chat" | "participants" | "transcript") => void;
   language: DisplayLanguage;
@@ -50,6 +53,8 @@ export function ControlBar({
   cameraEnabled,
   onToggleMic,
   onToggleCamera,
+  detectionEnabled,
+  onToggleDetection,
   activePanel,
   onOpenPanel,
   language,
@@ -134,6 +139,18 @@ export function ControlBar({
           <span className="controlbar__divider" aria-hidden="true" />
 
           <div className="controlbar__group">
+            <button
+              type="button"
+              className={["ctl ctl--round", detectionEnabled ? "ctl--on" : ""].join(" ")}
+              onClick={onToggleDetection}
+              aria-label={detectionEnabled ? "Disable sign language detection" : "Enable sign language detection"}
+              aria-pressed={detectionEnabled}
+              title={detectionEnabled ? "Sign language detection on" : "Enable sign language detection"}
+              data-testid="ctrl-detection"
+            >
+              <HandPalm size={24} weight="fill" aria-hidden="true" />
+            </button>
+
             <ControlButton
               label="Participants"
               panel="participants"
@@ -299,6 +316,14 @@ export function ControlBar({
           ) : (
             <VideoCameraSlash size={22} weight="fill" aria-hidden="true" />
           )}
+        </MobileAction>
+
+        <MobileAction
+          label={detectionEnabled ? "ISL On" : "ISL"}
+          active={detectionEnabled}
+          onClick={onToggleDetection}
+        >
+          <HandPalm size={22} weight="fill" aria-hidden="true" />
         </MobileAction>
 
         <MobileTab
