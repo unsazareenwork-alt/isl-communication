@@ -34,6 +34,8 @@ export function TranscriptPanel({ meetingId, token, language, currentUserId, cur
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const transcriptMessages = messages.filter((m) => m.message_type !== "chat");
+
   const load = useCallback(() => {
     let cancelled = false;
     setLoading(true);
@@ -61,7 +63,7 @@ export function TranscriptPanel({ meetingId, token, language, currentUserId, cur
   return (
     <section className="panel" aria-label="Meeting transcript">
       <div className="transcript__toolbar">
-        <span className="transcript__count">{messages.length} entries</span>
+        <span className="transcript__count">{transcriptMessages.length} entries</span>
         <Button variant="ghost" size="sm" onClick={load} disabled={loading}>
           {loading ? "Loading…" : "Refresh"}
         </Button>
@@ -77,15 +79,15 @@ export function TranscriptPanel({ meetingId, token, language, currentUserId, cur
 
         {error && !loading && <p className="transcript__status transcript__error">{error}</p>}
 
-        {!loading && !error && messages.length === 0 && (
+        {!loading && !error && transcriptMessages.length === 0 && (
           <p className="transcript__empty">No transcript entries yet.</p>
         )}
 
         {!loading &&
           !error &&
-          messages.length > 0 && (
+          transcriptMessages.length > 0 && (
             <ol className="transcript__list">
-              {messages.map((m) => (
+              {transcriptMessages.map((m) => (
                 <li key={m.id} className="transcript__row">
                   <div className="transcript__meta">
                     <span className="transcript__who">
