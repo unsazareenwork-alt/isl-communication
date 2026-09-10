@@ -6,6 +6,9 @@ const FRAME_HEIGHT = 480;
 const JPEG_QUALITY = 0.65;
 const AI_WS_URL = import.meta.env.DEV ? "ws://127.0.0.1:8765" : "wss://isl-ai-server.onrender.com";
 
+const MAX_RETRIES = 3;
+const RECONNECT_DELAYS_MS = [2000, 4000, 8000];
+
 interface UseSignLanguageAIOptions {
   stream: MediaStream | null;
   meetingId: string;
@@ -22,6 +25,9 @@ export function useSignLanguageAI({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const frameLoopRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const visibleRef = useRef(true);
+  const retryCountRef = useRef(0);
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const connectionIdRef = useRef(0);
 
   const [aiSentence, setAiSentence] = useState("");
   const [detectedWord, setDetectedWord] = useState("");
@@ -91,14 +97,41 @@ export function useSignLanguageAI({
       }
     }
 
+    function cancelReconnect() {
+      if (reconnectTimerRef.current !== null) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+    }
+
+    function scheduleReconnect() {
+      cancelReconnect();
+      const attempt = retryCountRef.current;
+      if (attempt >= MAX_RETRIES) {
+        console.log("[ISL AI] max retries reached, giving up");
+        return;
+      }
+      const delay = RECONNECT_DELAYS_MS[attempt];
+      retryCountRef.current = attempt + 1;
+      console.log("[ISL AI] scheduling reconnect #" + (attempt + 1) + " in " + delay + "ms");
+      reconnectTimerRef.current = setTimeout(() => {
+        reconnectTimerRef.current = null;
+        if (!visibleRef.current) return;
+        connectWs();
+      }, delay);
+    }
+
     function connectWs() {
       if (wsRef.current) return;
 
+      const currentId = ++connectionIdRef.current;
       const ws = new WebSocket(AI_WS_URL);
       wsRef.current = ws;
 
       ws.onopen = () => {
+        if (connectionIdRef.current !== currentId) return;
         console.log("[ISL AI] WebSocket opened");
+        retryCountRef.current = 0;
         ws.send(JSON.stringify({ type: "init", meetingId }));
         console.log("[ISL AI] capture interval starting (every", FRAME_INTERVAL_MS, "ms)");
         startCapture();
@@ -122,15 +155,18 @@ export function useSignLanguageAI({
       };
 
       ws.onerror = (event) => {
+        if (connectionIdRef.current !== currentId) return;
         console.error("[ISL AI] WebSocket error:", event);
         stopCapture();
         wsRef.current = null;
       };
 
       ws.onclose = (event) => {
+        if (connectionIdRef.current !== currentId) return;
         console.log("[ISL AI] WebSocket closed, code:", event.code, "reason:", event.reason);
         stopCapture();
         wsRef.current = null;
+        scheduleReconnect();
       };
     }
 
@@ -148,6 +184,8 @@ export function useSignLanguageAI({
 
     return () => {
       visibleRef.current = false;
+      cancelReconnect();
+      retryCountRef.current = 0;
       stopCapture();
 
       const ws = wsRef.current;
