@@ -14,7 +14,6 @@ router.post('/predict', authMiddleware, async (req, res) => {
   }
 
   const senderId = req.user.id;
-  const senderName = req.user.user_metadata?.name || 'Anonymous';
   const { meeting_id, sign, confidence, language } = req.body;
 
   if (!isValidUUID(meeting_id)) {
@@ -58,6 +57,22 @@ router.post('/predict', authMiddleware, async (req, res) => {
     return res.status(500).json({ error: 'Failed to save prediction. Please try again.' });
   }
 
+  // Resolve sender_name from the profiles table (single source of truth),
+  // instead of the JWT's user_metadata. This keeps live broadcasts consistent
+  // with historical fetches (GET /api/messages/:meetingId already uses
+  // profiles.name), and means a direct profiles.name fix takes effect
+  // immediately here too, with no dependency on the caller's JWT being fresh.
+  const { data: profile, error: profileError } = await supabase
+    .from('profiles')
+    .select('name')
+    .eq('id', senderId)
+    .single();
+
+  if (profileError) {
+    console.error('Fetch sender profile error:', profileError.message);
+  }
+
+  const senderName = profile?.name || 'Anonymous';
   const responseData = { ...data, sender_name: senderName };
 
   const io = req.app.get('io');

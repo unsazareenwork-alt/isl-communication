@@ -11,7 +11,6 @@ const REGIONAL_LANGUAGE = 'ta';
 // POST /api/messages
 router.post('/', authMiddleware, async (req, res) => {
   const senderId = req.user.id;
-  const senderName = req.user.user_metadata?.name || 'Anonymous';
   const { meeting_id, message_type, original_text, translated_text, language } = req.body;
 
   if (!isValidUUID(meeting_id)) {
@@ -57,6 +56,20 @@ router.post('/', authMiddleware, async (req, res) => {
     return res.status(500).json({ error: 'Failed to save message. Please try again.' });
   }
 
+  // Resolve sender_name from profiles (same source GET /:meetingId already
+  // uses) instead of JWT user_metadata, so live broadcasts and historical
+  // fetches never disagree about a user's display name.
+  const { data: profile, error: profileError } = await supabase
+    .from('profiles')
+    .select('name')
+    .eq('id', senderId)
+    .single();
+
+  if (profileError) {
+    console.error('Fetch sender profile error:', profileError.message);
+  }
+
+  const senderName = profile?.name || 'Anonymous';
   const responseData = { ...data, sender_name: senderName };
 
   const io = req.app.get('io');
