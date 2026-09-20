@@ -27,6 +27,27 @@ class BackendClient:
 
 
     # ======================================
+    # BUILD REQUEST HEADERS
+    # ======================================
+
+    def _build_headers(self, access_token=None):
+
+        if access_token:
+            return {
+                "Authorization":
+                    f"Bearer {access_token}",
+
+                "Content-Type":
+                    "application/json"
+            }
+
+        if self.headers:
+            return self.headers
+
+        return None
+
+
+    # ======================================
     # LOGIN
     # ======================================
 
@@ -202,10 +223,14 @@ class BackendClient:
         self,
         sign,
         confidence,
-        language="en"
+        language="en",
+        meeting_id=None,
+        access_token=None
     ):
 
-        if self.meeting_id is None:
+        meeting_id = meeting_id or self.meeting_id
+
+        if meeting_id is None:
 
             print(
                 "ERROR: Meeting required before "
@@ -215,10 +240,22 @@ class BackendClient:
             return False
 
 
+        headers = self._build_headers(access_token)
+
+        if headers is None:
+
+            print(
+                "ERROR: No authentication token. "
+                "Call login() or provide access_token."
+            )
+
+            return False
+
+
         payload = {
 
             "meeting_id":
-                self.meeting_id,
+                meeting_id,
 
             "sign":
                 str(sign),
@@ -237,7 +274,7 @@ class BackendClient:
 
                 f"{BACKEND_URL}/ai/predict",
 
-                headers=self.headers,
+                headers=headers,
 
                 json=payload,
 
@@ -282,10 +319,14 @@ class BackendClient:
     def send_word(
         self,
         word,
-        language="en"
+        language="en",
+        meeting_id=None,
+        access_token=None
     ):
 
-        if self.meeting_id is None:
+        meeting_id = meeting_id or self.meeting_id
+
+        if meeting_id is None:
 
             print(
                 "ERROR: Meeting required before "
@@ -307,6 +348,18 @@ class BackendClient:
             return False
 
 
+        headers = self._build_headers(access_token)
+
+        if headers is None:
+
+            print(
+                "ERROR: No authentication token. "
+                "Call login() or provide access_token."
+            )
+
+            return False
+
+
         # ==================================
         # WORD PAYLOAD
         # ==================================
@@ -314,7 +367,7 @@ class BackendClient:
         payload = {
 
             "meeting_id":
-                self.meeting_id,
+                meeting_id,
 
             "sign":
                 word,
@@ -333,7 +386,7 @@ class BackendClient:
 
                 f"{BACKEND_URL}/ai/predict",
 
-                headers=self.headers,
+                headers=headers,
 
                 json=payload,
 

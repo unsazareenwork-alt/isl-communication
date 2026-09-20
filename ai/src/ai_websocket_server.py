@@ -44,6 +44,7 @@ CONFIDENCE_THRESHOLD = 0.30
 PREDICTION_WINDOW = 3
 STABLE_COUNT_REQUIRED = 2
 COOLDOWN_FRAMES = 10
+TRANSITION_DISAGREEMENT = 3
 
 # ============================================================
 # LOAD V4 MODEL
@@ -110,12 +111,21 @@ print("=" * 60)
 
 backend = BackendClient()
 
-if not backend.login():
-    print("\nERROR: Backend login failed.")
-    hands.close()
-    raise SystemExit(1)
+print(
+    "\nStartup shared-account login is optional; "
+    "predictions use each caller's own access token."
+)
 
-print("\nAI backend login successful.")
+if backend.login():
+    print(
+        "\nStartup shared-account login successful "
+        "(NOT used for message authorship)."
+    )
+else:
+    print(
+        "\nWARNING: Startup shared-account login failed; server will "
+        "continue using per-connection user access tokens."
+    )
 
 
 # ============================================================
@@ -274,6 +284,8 @@ def create_session():
     return {
         "meeting_id": None,
 
+        "token": None,
+
         "mode": "word",
 
         "sequence_buffer": deque(
@@ -295,6 +307,8 @@ def create_session():
         "accepted_sign": None,
 
         "cooldown_counter": 0,
+
+        "transition_streak": 0,
 
         "frame_count": 0,
 
@@ -321,6 +335,7 @@ def reset_session_state(session):
     session["stable_count"] = 0
     session["accepted_sign"] = None
     session["cooldown_counter"] = 0
+    session["transition_streak"] = 0
 
     session["frame_count"] = 0
     session["detected_count"] = 0
@@ -547,17 +562,45 @@ async def process_frame(frame, session):
         session["stable_count"] = 1
 
     # --------------------------------------------------------
+    # TRANSITION TRACKING
+    # --------------------------------------------------------
+
+    if (
+        session["accepted_sign"] is not None
+        and current_prediction != session["accepted_sign"]
+    ):
+
+        session["transition_streak"] += 1
+
+        if (
+            session["transition_streak"]
+            >= TRANSITION_DISAGREEMENT
+        ):
+            session["cooldown_counter"] = 0
+
+    else:
+        session["transition_streak"] = 0
+
+    # --------------------------------------------------------
     # ACCEPT SIGN
     # --------------------------------------------------------
 
     accepted = False
     accepted_word = None
 
+    in_transition = (
+        session["transition_streak"]
+        >= TRANSITION_DISAGREEMENT
+    )
+
     if (
         session["stable_count"]
         >= STABLE_COUNT_REQUIRED
 
-        and session["cooldown_counter"] == 0
+        and (
+            session["cooldown_counter"] == 0
+            or in_transition
+        )
 
         and session["accepted_sign"]
         != current_prediction
@@ -581,7 +624,6 @@ async def process_frame(frame, session):
         session["accepted_sign"] = (
             current_prediction
         )
-        session["prediction_buffer"].clear()
 
         session["stable_prediction"] = None
 
@@ -614,7 +656,9 @@ async def process_frame(frame, session):
         success = await asyncio.to_thread(
             backend.send_word,
             word=current_prediction,
-            language="en"
+            language="en",
+            meeting_id=session["meeting_id"],
+            access_token=session.get("token")
         )
 
         if success:
@@ -796,16 +840,29 @@ async def handle_client(websocket):
 
                     continue
 
+                token = data.get("token")
+
+                if not isinstance(token, str) or not token.strip():
+
+                    print(
+                        "ERROR: No user access token received."
+                    )
+
+                    await websocket.send(
+                        json.dumps({
+                            "type": "error",
+                            "message":
+                                "Access token missing"
+                        })
+                    )
+
+                    continue
+
                 session["meeting_id"] = (
                     meeting_id
                 )
 
-                # IMPORTANT:
-                # Use the actual meeting from React.
-
-                backend.meeting_id = (
-                    meeting_id
-                )
+                session["token"] = token
 
                 reset_session_state(
                     session
@@ -866,6 +923,23 @@ async def handle_client(websocket):
             # =================================================
 
             elif message_type == "frame":
+
+                if not session.get("token"):
+
+                    print(
+                        "Frame ignored: connection has no "
+                        "user access token."
+                    )
+
+                    await websocket.send(
+                        json.dumps({
+                            "type": "error",
+                            "message":
+                                "Access token required before frames"
+                        })
+                    )
+
+                    continue
 
                 frame_data = data.get(
                     "data"
