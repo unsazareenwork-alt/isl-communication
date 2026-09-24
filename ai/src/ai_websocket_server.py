@@ -44,6 +44,10 @@ CONFIDENCE_THRESHOLD = 0.30
 PREDICTION_WINDOW = 3
 STABLE_COUNT_REQUIRED = 2
 COOLDOWN_FRAMES = 10
+
+# Consecutive frames where current_prediction disagrees with the last
+# accepted sign before we consider the previous sign exited and waive
+# its leftover emission cooldown.
 TRANSITION_DISAGREEMENT = 3
 
 # ============================================================
@@ -111,6 +115,11 @@ print("=" * 60)
 
 backend = BackendClient()
 
+# The shared-account startup login is NOT used for message authorship.
+# Each WebSocket connection authenticates as its own user via the access
+# token the signed-in frontend sends in the init message. This login is
+# only an optional startup health check and never falls back to shared
+# authorship for a real connected user.
 print(
     "\nStartup shared-account login is optional; "
     "predictions use each caller's own access token."
@@ -369,6 +378,12 @@ async def process_frame(frame, session):
 
     # --------------------------------------------------------
     # Add frame to sequence
+    #
+    # Rolling 30-frame window: sequence_buffer is a deque with
+    # maxlen=SEQUENCE_LENGTH, so once full each append slides the
+    # window forward and drops the oldest frame. It is never
+    # cleared between predictions, so inference runs continuously
+    # on the latest 30 frames rather than in fixed 30-frame batches.
     # --------------------------------------------------------
 
     session["sequence_buffer"].append(
@@ -562,12 +577,22 @@ async def process_frame(frame, session):
         session["stable_count"] = 1
 
     # --------------------------------------------------------
-    # TRANSITION TRACKING
+    # Transition tracking
+    #
+    # Counts how many consecutive frames the current prediction
+    # disagrees with the last emitted/accepted sign. Reaching
+    # TRANSITION_DISAGREEMENT means the previous sign has
+    # demonstrably exited, so any leftover emission cooldown from
+    # that sign is waived and the next stable candidate can be
+    # accepted as soon as it stabilizes — without waiting for the
+    # old frames to fully leave the rolling 30-frame window or for
+    # a completely fresh 30-frame batch.
     # --------------------------------------------------------
 
     if (
         session["accepted_sign"] is not None
-        and current_prediction != session["accepted_sign"]
+        and current_prediction
+        != session["accepted_sign"]
     ):
 
         session["transition_streak"] += 1
@@ -576,9 +601,11 @@ async def process_frame(frame, session):
             session["transition_streak"]
             >= TRANSITION_DISAGREEMENT
         ):
+
             session["cooldown_counter"] = 0
 
     else:
+
         session["transition_streak"] = 0
 
     # --------------------------------------------------------
@@ -624,7 +651,11 @@ async def process_frame(frame, session):
         session["accepted_sign"] = (
             current_prediction
         )
-
+        # Keep the majority prediction window intact so the stream
+        # stays continuous after an accepted sign. Duplicate
+        # consecutive emissions are already prevented by the
+        # accepted_sign guard and the cooldown counter below, so
+        # there is no need to reset the window after each emission.
         session["stable_prediction"] = None
 
         session["stable_count"] = 0 
@@ -840,6 +871,11 @@ async def handle_client(websocket):
 
                     continue
 
+                # The signed-in frontend sends the user's short-lived
+                # access token here. It must exist and be a string.
+                # It is kept on this connection only, is never logged,
+                # never persisted, and is never shared with other
+                # connections.
                 token = data.get("token")
 
                 if not isinstance(token, str) or not token.strip():
@@ -924,6 +960,8 @@ async def handle_client(websocket):
 
             elif message_type == "frame":
 
+                # Reject frames unless this connection was
+                # authenticated with the signer's access token.
                 if not session.get("token"):
 
                     print(
