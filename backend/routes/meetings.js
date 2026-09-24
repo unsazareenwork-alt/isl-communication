@@ -129,11 +129,23 @@ router.post('/leave/:id', authMiddleware, async (req, res) => {
 
   // Notify others in the room that this specific participant left
   // (covers the case where the frontend calls this endpoint but the
-  // socket disconnect event hasn't fired yet, or fires separately)
+  // socket disconnect event hasn't fired yet, or fires separately).
+  // This is an HTTP route, not a socket event, so it has no reliable way to
+  // know the caller's current socketId — unlike the Socket.IO disconnect
+  // handler in server.js. To keep this payload useful either way, we key on
+  // userId (available from both paths) and include userName, rather than a
+  // socketId that can't be reliably supplied here.
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('name')
+    .eq('id', userId)
+    .single();
+
   const io = req.app.get('io');
   if (io) {
     io.to(id).emit('user-left', {
       userId,
+      userName: profile?.name || 'Anonymous',
       message: 'A participant has left the meeting'
     });
   }
