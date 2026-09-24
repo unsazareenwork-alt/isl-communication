@@ -1,6 +1,8 @@
+import os
 import requests
+from dotenv import load_dotenv
 
-
+load_dotenv()
 # ==========================================
 # BACKEND CONFIGURATION
 # ==========================================
@@ -10,9 +12,10 @@ BACKEND_URL = "https://isl-communication.onrender.com/api"
 EMAIL = "abc123@gmail.com"
 
 # Keep your existing backend password here.
-PASSWORD = "vanshika"
+PASSWORD = os.environ.get("BACKEND_PASSWORD")
 
-
+if not PASSWORD:
+    raise RuntimeError("BACKEND_PASSWORD environment variable is not set.")
 # ==========================================
 # BACKEND CLIENT
 # ==========================================

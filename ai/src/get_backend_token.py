@@ -1,4 +1,8 @@
+import os
 import requests
+from dotenv import load_dotenv
+
+load_dotenv()
 
 BASE_URL = "https://isl-communication.onrender.com"
 
@@ -7,7 +11,10 @@ BASE_URL = "https://isl-communication.onrender.com"
 # ============================================================
 
 EMAIL = "abc123@gmail.com"
-PASSWORD = "vanshika"
+PASSWORD = os.environ.get("BACKEND_PASSWORD")
+
+if not PASSWORD:
+    raise RuntimeError("BACKEND_PASSWORD environment variable is not set.")
 NAME = "Vanshika"
 
 
