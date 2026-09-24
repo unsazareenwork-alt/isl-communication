@@ -22,8 +22,6 @@ const messageRoutes = require('./routes/messages');
 app.use('/api/messages', messageRoutes);
 const aiRoutes = require('./routes/ai');
 app.use('/api/ai', aiRoutes);
-const practiceRoutes = require('./routes/practice');
-app.use('/api/practice', practiceRoutes);
 app.use(express.static(__dirname));
 
 app.get('/api/protected-test', authMiddleware, (req, res) => {
