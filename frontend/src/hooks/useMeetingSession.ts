@@ -65,6 +65,10 @@ export function useMeetingSession({
         onLocalSocketId: (id) => {
           localSocketIdRef.current = id;
           setLocalSocketId(id);
+          // A new socket id means a (re)connection, so the "trying to
+          // reconnect" notice is stale. The session re-joins and rebuilds the
+          // peers under this id.
+          setDisconnected(false);
         },
         onLocalStream: setLocalStream,
         onMediaState: (state) => {
@@ -283,8 +287,8 @@ export function useMeetingSession({
     })),
   ];
 
-  // [DIAG] log the participant list handed to the grid
-  if (localStream) {
+  // [DIAG] DEV-only snapshot of the participant list handed to the grid.
+  if (import.meta.env.DEV && localStream) {
     console.log(
       "[MEDIA] participants for grid:",
       participants.map((p) => ({

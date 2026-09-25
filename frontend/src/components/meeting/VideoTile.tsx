@@ -28,8 +28,9 @@ export function VideoTile({
   const videoRef = useRef<HTMLVideoElement>(null);
   const mountCount = useRef(0);
 
-  // [DIAG] Mount/update/unmount
+  // [DIAG] Mount/update/unmount (DEV only)
   useEffect(() => {
+    if (!import.meta.env.DEV) return;
     mountCount.current += 1;
     console.log(
       `[MEDIA] VideoTile MOUNT #${mountCount.current}`, { isLocal, name, streamId: stream?.id ?? null, vTracks: stream?.getVideoTracks().length ?? 0, cameraOff },
@@ -44,9 +45,11 @@ export function VideoTile({
     const el = videoRef.current;
     if (!el) return;
 
-    console.log(
-      `[MEDIA] VideoTile UPDATE`, { isLocal, name, streamId: stream?.id ?? null, vTracks: stream?.getVideoTracks().length ?? 0, cameraOff, videoPaused: el.paused },
-    );
+    if (import.meta.env.DEV) {
+      console.log(
+        `[MEDIA] VideoTile UPDATE`, { isLocal, name, streamId: stream?.id ?? null, vTracks: stream?.getVideoTracks().length ?? 0, cameraOff, videoPaused: el.paused },
+      );
+    }
 
     if (stream) {
       if (el.srcObject !== stream) {
@@ -77,10 +80,11 @@ export function VideoTile({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cameraOff, stream]);
 
-  // [DIAG] video element events + dimensions
+  // [DIAG] video element events + dimensions (DEV only)
   useEffect(() => {
     const el = videoRef.current;
     if (!el) return;
+    if (!import.meta.env.DEV) return;
     const log = (evt: string) => {
       console.log(`[MEDIA] <video> ${evt}`, {
         isLocal, name,         streamId: (el.srcObject as MediaStream | null)?.id ?? null,

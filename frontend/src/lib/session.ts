@@ -1,5 +1,14 @@
 import type { Socket } from "socket.io-client";
 import { createSocket, disconnectSocket } from "./socket";
+import {
+  PeerRecovery,
+  PendingCandidateQueue,
+  candidateMatchesUfrags,
+  extractIceUfrags,
+  type PeerIceState,
+  type PeerLinkState,
+  type RecoveryAction,
+} from "./webrtcRecovery";
 import type { Message } from "./types";
 
 export interface SessionConfig {
@@ -86,10 +95,55 @@ const RTC_CONFIG: RTCConfiguration = {
 const STORAGE_KEY_CAMERA = "shiksha_sanket_selected_camera";
 const STORAGE_KEY_MIC = "shiksha_sanket_selected_microphone";
 
+// ===================== Peer connection bookkeeping =====================
+
+/**
+ * How long an ICE restart may take to bring the peer back to `connected` before
+ * the next recovery attempt is spent. Generous on purpose: it must only fire for
+ * a restart that clearly did not help.
+ */
+const ICE_RESTART_SETTLE_MS = 20000;
+
+/**
+ * Everything the session needs to know about one remote peer besides the
+ * RTCPeerConnection itself. Kept out of the WebRTC object so a peer can be
+ * cleaned up (timers, buffered candidates) even when the connection is already
+ * broken.
+ */
+interface PeerRuntime {
+  pc: RTCPeerConnection;
+  /** Bounded failure recovery: grace period + limited ICE restarts. */
+  recovery: PeerRecovery;
+  /** Candidates received before the remote description was applied. */
+  candidates: PendingCandidateQueue<RTCIceCandidateInit>;
+  /** Serializes addIceCandidate so ordering survives async gaps. */
+  candidateChain: Promise<void>;
+  hasRemoteDescription: boolean;
+  /** `a=ice-ufrag` values of the currently applied remote description. */
+  remoteUfrags: string[];
+  /** True when this side sent the initial offer, i.e. it drives ICE restarts. */
+  offerer: boolean;
+  /** Perfect-negotiation tie-break: the polite peer rolls back on glare. */
+  polite: boolean;
+  graceTimer: ReturnType<typeof setTimeout> | null;
+  restartTimer: ReturnType<typeof setTimeout> | null;
+}
+
 // DEV-only WebRTC diagnostics master switch. Set to false to temporarily
 // disable the getStats sampler for regression isolation, keeping all other
 // WebRTC behavior unchanged.
 const DEV_STATS_ENABLED = false;
+
+/**
+ * DEV-only structured WebRTC logging. Only non-sensitive state transitions are
+ * reported: never auth material, TURN credentials, SDP bodies, candidate
+ * payloads or network addresses. A truncated socket id is the only remote
+ * identifier used so reconnects can be correlated across logs.
+ */
+function logPeerEvent(event: string, remoteSocketId: string, data?: Record<string, unknown>): void {
+  if (!import.meta.env.DEV) return;
+  console.debug(`[WebRTC] ${event}`, { peer: remoteSocketId.slice(-6), ...data });
+}
 
 // ===================== Device persistence =====================
 
@@ -247,7 +301,8 @@ export class MeetingSession {
   private cb: SessionCallbacks;
 
   private localStream: MediaStream | null = null;
-  private peers = new Map<string, RTCPeerConnection>();
+  /** socketId -> live peer state (connection + recovery + candidate buffer). */
+  private peerRuntimes = new Map<string, PeerRuntime>();
   private participantNames = new Map<string, string>();
   /** socketId -> remote media state (camera/mic enabled). */
   private remoteMediaStates = new Map<string, MediaState>();
@@ -263,6 +318,8 @@ export class MeetingSession {
 
   /** Whether we have actually joined the meeting room (emitted join-meeting). */
   private joined = false;
+  /** Socket id the current join was announced with; differs after a reconnect. */
+  private joinedSocketId: string | null = null;
   /** Whether the user has signalled they want to enter the meeting (pre-join done). */
   private readyToJoin = false;
   /** True while the pre-join preview screen is showing; media is acquired only via startPreview. */
@@ -401,6 +458,24 @@ export class MeetingSession {
     this.emitParticipantList();
   }
 
+  /**
+   * Drop every remote after a socket reconnection. All existing peer
+   * connections are addressed by the socket id that just died, so none of them
+   * can ever be used again; the participants are re-announced by the backend
+   * when we re-join and fresh connections are created for them.
+   */
+  private resetRemoteStateForReconnect() {
+    for (const remoteSocketId of [...this.peerRuntimes.keys()]) {
+      this.removePeer(remoteSocketId);
+    }
+    this.participantNames.clear();
+    this.remoteMediaStates.clear();
+    this.ignoredRemoteSockets.clear();
+    this.activeRemoteByUserId.clear();
+    this.userIdByRemoteSocket.clear();
+    this.cb.onParticipantList([]);
+  }
+
   private attachSocketHandlers() {
     const s = this.socket;
 
@@ -510,30 +585,18 @@ export class MeetingSession {
       });
     });
 
-    s.on("webrtc-offer", async (data: { offer: RTCSessionDescriptionInit; from: string }) => {
-      await this.handleOffer(data.from, data.offer);
+    s.on("webrtc-offer", (data: { offer: RTCSessionDescriptionInit; from: string }) => {
+      void this.handleOffer(data.from, data.offer).catch((err: unknown) => {
+        logPeerEvent("offer handling failed", data.from, { error: String(err) });
+      });
     });
 
-    s.on("webrtc-answer", async (data: { answer: RTCSessionDescriptionInit; from: string }) => {
-      const pc = this.peers.get(data.from);
-      if (pc && pc.signalingState !== "stable") {
-        try {
-          await pc.setRemoteDescription(new RTCSessionDescription(data.answer));
-        } catch (err) {
-          console.error("Answer setRemoteDescription failed:", err);
-        }
-      }
+    s.on("webrtc-answer", (data: { answer: RTCSessionDescriptionInit; from: string }) => {
+      void this.handleAnswer(data.from, data.answer);
     });
 
-    s.on("webrtc-ice-candidate", async (data: { candidate: RTCIceCandidateInit; from: string }) => {
-      const pc = this.peers.get(data.from);
-      if (pc && data.candidate) {
-        try {
-          await pc.addIceCandidate(new RTCIceCandidate(data.candidate));
-        } catch (err) {
-          console.error("ICE candidate failed:", err);
-        }
-      }
+    s.on("webrtc-ice-candidate", (data: { candidate: RTCIceCandidateInit | null; from: string }) => {
+      this.handleRemoteCandidate(data.from, data.candidate);
     });
 
     s.on("new-message", (message: Message) => this.cb.onMessage(message));
@@ -558,13 +621,30 @@ export class MeetingSession {
   /**
    * Called when the socket connects (or synchronously if already connected).
    * Acquires media and, if the user is ready to join, emits join-meeting.
+   *
+   * A reconnection always yields a NEW socket id, and every peer connection is
+   * addressed by socket id, so the old ones are unusable. In that case the
+   * remote state is dropped and the room is re-joined under the new id, which
+   * makes the backend re-announce the other participants and rebuilds the
+   * connections from scratch instead of silently keeping dead tiles.
    */
   private async handleConnect() {
     if (this.destroyed) return;
-    this.localSocketId = this.socket.id ?? null;
-    if (this.localSocketId) this.cb.onLocalSocketId(this.localSocketId);
+    const previousSocketId = this.localSocketId;
+    const socketId = this.socket.id ?? null;
+    this.localSocketId = socketId;
+    if (socketId) this.cb.onLocalSocketId(socketId);
 
-    if (this.joined) return;
+    if (this.joined) {
+      if (!socketId || socketId === this.joinedSocketId) return;
+      logPeerEvent("socket reconnected", previousSocketId ?? "unknown", {
+        newSocketId: socketId.slice(-6),
+      });
+      this.resetRemoteStateForReconnect();
+      this.emitJoin();
+      this.broadcastMediaState();
+      return;
+    }
 
     // While the pre-join preview is active, the single media acquisition happens
     // in startPreview(); the socket connecting here must NOT acquire a second
@@ -854,8 +934,8 @@ export class MeetingSession {
   }
 
   private replaceTracksOnAllPeers(newStream: MediaStream) {
-    for (const [, pc] of this.peers) {
-      const senders = pc.getSenders();
+    for (const [, runtime] of this.peerRuntimes) {
+      const senders = runtime.pc.getSenders();
       for (const sender of senders) {
         if (sender.track?.kind === "video") {
           const newVideo = newStream.getVideoTracks()[0];
@@ -875,8 +955,8 @@ export class MeetingSession {
    * it. No SDP renegotiation is required for track swaps.
    */
   private replaceLocalVideoOnPeers(track: MediaStreamTrack | null) {
-    for (const [, pc] of this.peers) {
-      for (const transceiver of pc.getTransceivers()) {
+    for (const [, runtime] of this.peerRuntimes) {
+      for (const transceiver of runtime.pc.getTransceivers()) {
         if (transceiver.receiver?.track?.kind !== "video") continue;
         const dir = transceiver.direction;
         if (dir === "sendonly" || dir === "sendrecv") {
@@ -887,6 +967,7 @@ export class MeetingSession {
   }
 
   private emitJoin() {
+    this.joinedSocketId = this.localSocketId;
     this.socket.emit("join-meeting", {
       meetingCode: this.config.meetingCode,
       userName: this.config.userName,
@@ -905,7 +986,7 @@ export class MeetingSession {
     if (!DEV_STATS_ENABLED) return;
     if (!import.meta.env.DEV) return;
     if (this.statsTimers.has(remoteSocketId)) return;
-    const pc = this.peers.get(remoteSocketId);
+    const pc = this.peerRuntimes.get(remoteSocketId)?.pc;
     if (!pc) return;
 
     const state = {
@@ -1052,8 +1133,30 @@ export class MeetingSession {
     }
   }
 
-  private createPeerConnection(remoteSocketId: string): RTCPeerConnection {
+  /**
+   * Perfect-negotiation tie-break. Both peers run this same code, so comparing
+   * socket ids yields a stable answer on both sides: exactly one of them is
+   * "polite" and yields (rolls back) if both send offers at the same time.
+   */
+  private isPolitePeer(remoteSocketId: string): boolean {
+    if (!this.localSocketId) return true;
+    return this.localSocketId < remoteSocketId;
+  }
+
+  private createPeerConnection(remoteSocketId: string, offerer: boolean): PeerRuntime {
     const pc = new RTCPeerConnection(RTC_CONFIG);
+    const runtime: PeerRuntime = {
+      pc,
+      recovery: new PeerRecovery(),
+      candidates: new PendingCandidateQueue<RTCIceCandidateInit>(),
+      candidateChain: Promise.resolve(),
+      hasRemoteDescription: false,
+      remoteUfrags: [],
+      offerer,
+      polite: this.isPolitePeer(remoteSocketId),
+      graceTimer: null,
+      restartTimer: null,
+    };
 
     if (this.localStream) {
       this.localStream.getTracks().forEach((track) => pc.addTrack(track, this.localStream!));
@@ -1066,9 +1169,13 @@ export class MeetingSession {
     }
 
     pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        this.socket.emit("webrtc-ice-candidate", { candidate: event.candidate, to: remoteSocketId });
-      }
+      // A null candidate is the end-of-candidates marker: forward it so the far
+      // side can stop waiting for more candidates instead of relying on a
+      // timeout.
+      this.socket.emit("webrtc-ice-candidate", {
+        candidate: event.candidate ? event.candidate.toJSON() : null,
+        to: remoteSocketId,
+      });
     };
 
     pc.ontrack = (event) => {
@@ -1077,15 +1184,119 @@ export class MeetingSession {
     };
 
     pc.onconnectionstatechange = () => {
-      const state = pc.connectionState;
-      if (state === "failed" || state === "closed") {
-        this.takeDownRemote(remoteSocketId);
-      }
+      this.applyRecoveryAction(
+        remoteSocketId,
+        runtime.recovery.observeConnectionState(pc.connectionState as PeerLinkState),
+        runtime,
+      );
     };
 
-    this.peers.set(remoteSocketId, pc);
+    pc.oniceconnectionstatechange = () => {
+      this.applyRecoveryAction(
+        remoteSocketId,
+        runtime.recovery.observeIceConnectionState(pc.iceConnectionState as PeerIceState),
+        runtime,
+      );
+    };
+
+    this.peerRuntimes.set(remoteSocketId, runtime);
     this.startPeerStats(remoteSocketId);
-    return pc;
+    logPeerEvent("peer created", remoteSocketId, { offerer, polite: runtime.polite });
+    return runtime;
+  }
+
+  /**
+   * Perform the recovery decision taken by the peer's state machine. The
+   * machine only decides; every side effect (timers, ICE restart, teardown)
+   * happens here, and only for the runtime that is still the live peer.
+   */
+  private applyRecoveryAction(remoteSocketId: string, action: RecoveryAction, runtime: PeerRuntime) {
+    if (action.type === "none") {
+      // A peer that came back cancels the settle timer of the restart in flight.
+      if (runtime.recovery.state === "connected" && runtime.restartTimer) {
+        clearTimeout(runtime.restartTimer);
+        runtime.restartTimer = null;
+      }
+      return;
+    }
+    if (this.destroyed) return;
+    if (this.peerRuntimes.get(remoteSocketId) !== runtime) return;
+
+    logPeerEvent(`recovery: ${action.type}`, remoteSocketId, {
+      linkState: runtime.recovery.state,
+      iceRestarts: runtime.recovery.iceRestarts,
+      iceConnectionState: runtime.pc.iceConnectionState,
+      queuedCandidates: runtime.candidates.size,
+    });
+
+    if (action.type === "await-grace") {
+      if (runtime.graceTimer) clearTimeout(runtime.graceTimer);
+      runtime.graceTimer = setTimeout(() => {
+        runtime.graceTimer = null;
+        if (this.destroyed || this.peerRuntimes.get(remoteSocketId) !== runtime) return;
+        this.applyRecoveryAction(remoteSocketId, runtime.recovery.onGraceExpired(), runtime);
+      }, action.timeoutMs);
+      return;
+    }
+
+    if (action.type === "restart-ice") {
+      if (runtime.graceTimer) {
+        clearTimeout(runtime.graceTimer);
+        runtime.graceTimer = null;
+      }
+      void this.restartIce(remoteSocketId, runtime, action.attempt);
+      return;
+    }
+
+    // give-up: the peer did not recover within the bounded attempt budget and
+    // is no longer claimed to be in the meeting.
+    this.takeDownRemote(remoteSocketId);
+  }
+
+  /**
+   * Re-offer with a fresh ICE generation. Bounded by PeerRecovery, so a peer
+   * that cannot be reached is abandoned after a few attempts instead of
+   * renegotiating forever.
+   */
+  private async restartIce(remoteSocketId: string, runtime: PeerRuntime, attempt: number) {
+    const { pc } = runtime;
+    if (this.destroyed || pc.connectionState === "closed") return;
+
+    // Candidates buffered for the previous generation are meaningless now; the
+    // new offer will bring its own.
+    runtime.candidates.clear();
+
+    try {
+      if (runtime.offerer && typeof pc.restartIce === "function") {
+        pc.restartIce();
+      }
+      const offer = await pc.createOffer({ iceRestart: true });
+      if (this.destroyed || this.peerRuntimes.get(remoteSocketId) !== runtime) return;
+      if (pc.signalingState !== "stable") {
+        // A negotiation is already in flight (remote-initiated). Let it finish;
+        // the state machine escalates again if this attempt did not help.
+        logPeerEvent("ice restart skipped, negotiation in flight", remoteSocketId, {
+          attempt,
+          signalingState: pc.signalingState,
+        });
+        return;
+      }
+      await pc.setLocalDescription(offer);
+      this.socket.emit("webrtc-offer", { offer: pc.localDescription ?? offer, to: remoteSocketId });
+      logPeerEvent("ice restart offered", remoteSocketId, { attempt, signalingState: pc.signalingState });
+
+      // Only a restart we actually sent is given time to settle; if it does not
+      // bring the peer back, spend the next attempt (or give up).
+      if (runtime.restartTimer) clearTimeout(runtime.restartTimer);
+      runtime.restartTimer = setTimeout(() => {
+        runtime.restartTimer = null;
+        if (this.destroyed || this.peerRuntimes.get(remoteSocketId) !== runtime) return;
+        if (runtime.recovery.state === "connected") return;
+        this.applyRecoveryAction(remoteSocketId, runtime.recovery.observeConnectionState("failed"), runtime);
+      }, ICE_RESTART_SETTLE_MS);
+    } catch (err) {
+      logPeerEvent("ice restart failed", remoteSocketId, { attempt, error: String(err) });
+    }
   }
 
   /**
@@ -1094,44 +1305,220 @@ export class MeetingSession {
    * announcement (with full userId info); this method only sets up the connection.
    */
   private async callUser(remoteSocketId: string) {
-    if (this.peers.has(remoteSocketId)) return;
+    if (this.peerRuntimes.has(remoteSocketId)) return;
     if (this.ignoredRemoteSockets.has(remoteSocketId)) return;
 
-    const pc = this.createPeerConnection(remoteSocketId);
+    let runtime: PeerRuntime;
     try {
-      const offer = await pc.createOffer();
-      await pc.setLocalDescription(offer);
-      this.socket.emit("webrtc-offer", { offer, to: remoteSocketId });
+      runtime = this.createPeerConnection(remoteSocketId, true);
     } catch (err) {
-      console.error("Offer failed:", err);
+      logPeerEvent("peer creation failed", remoteSocketId, { error: String(err) });
+      return;
+    }
+
+    try {
+      const offer = await runtime.pc.createOffer();
+      if (this.peerRuntimes.get(remoteSocketId) !== runtime) return;
+      await runtime.pc.setLocalDescription(offer);
+      this.socket.emit("webrtc-offer", {
+        offer: runtime.pc.localDescription ?? offer,
+        to: remoteSocketId,
+      });
+    } catch (err) {
+      logPeerEvent("offer failed", remoteSocketId, { error: String(err) });
     }
   }
 
   private async handleOffer(from: string, offer: RTCSessionDescriptionInit) {
+    if (this.destroyed) return;
     if (from === this.localSocketId) return;
     if (this.ignoredRemoteSockets.has(from)) return;
-    if (this.peers.has(from)) return;
 
-    const pc = this.createPeerConnection(from);
+    const existing = this.peerRuntimes.get(from);
+    if (existing) {
+      // A second offer for a known peer: a renegotiation or an ICE restart.
+      await this.answerOffer(from, existing, offer);
+      return;
+    }
+
+    let runtime: PeerRuntime;
+    try {
+      runtime = this.createPeerConnection(from, false);
+    } catch (err) {
+      logPeerEvent("peer creation failed", from, { error: String(err) });
+      return;
+    }
+    await this.answerOffer(from, runtime, offer);
+  }
+
+  /**
+   * Apply a remote offer and answer it. Also handles glare: if both sides offer
+   * at once, the impolite peer ignores the incoming offer and the polite peer
+   * rolls back its own local offer first.
+   */
+  private async answerOffer(from: string, runtime: PeerRuntime, offer: RTCSessionDescriptionInit) {
+    const { pc } = runtime;
+    if (pc.signalingState !== "stable" && pc.signalingState !== "have-remote-offer") {
+      if (runtime.polite) {
+        try {
+          await pc.setLocalDescription({ type: "rollback" });
+          logPeerEvent("rolled back local offer (glare)", from, { signalingState: pc.signalingState });
+        } catch (err) {
+          logPeerEvent("rollback failed", from, { error: String(err) });
+          return;
+        }
+      } else {
+        logPeerEvent("ignored incoming offer (glare)", from, { signalingState: pc.signalingState });
+        return;
+      }
+    }
+
     try {
       await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      if (this.destroyed || this.peerRuntimes.get(from) !== runtime) return;
+      runtime.hasRemoteDescription = true;
+      runtime.remoteUfrags = extractIceUfrags(pc.remoteDescription?.sdp);
+      await this.flushPendingCandidates(from, runtime);
+
       const answer = await pc.createAnswer();
       await pc.setLocalDescription(answer);
-      this.socket.emit("webrtc-answer", { answer, to: from });
+      this.socket.emit("webrtc-answer", { answer: pc.localDescription ?? answer, to: from });
     } catch (err) {
-      console.error("Answer failed:", err);
+      logPeerEvent("answer failed", from, { error: String(err) });
     }
+  }
+
+  private async handleAnswer(from: string, answer: RTCSessionDescriptionInit) {
+    const runtime = this.peerRuntimes.get(from);
+    if (!runtime) {
+      // Answer for an unknown/teardown peer: nothing to apply it to.
+      logPeerEvent("answer for unknown peer ignored", from);
+      return;
+    }
+
+    const { pc } = runtime;
+    if (pc.signalingState === "stable" || pc.signalingState === "closed") {
+      // Duplicate or late answer (e.g. after an ICE restart already settled).
+      logPeerEvent("answer ignored, no pending offer", from, { signalingState: pc.signalingState });
+      return;
+    }
+
+    try {
+      await pc.setRemoteDescription(new RTCSessionDescription(answer));
+      if (this.destroyed || this.peerRuntimes.get(from) !== runtime) return;
+      runtime.hasRemoteDescription = true;
+      runtime.remoteUfrags = extractIceUfrags(pc.remoteDescription?.sdp);
+      await this.flushPendingCandidates(from, runtime);
+    } catch (err) {
+      logPeerEvent("answer setRemoteDescription failed", from, { error: String(err) });
+    }
+  }
+
+  /**
+   * Route a remote ICE candidate. Candidates that arrive before the remote
+   * description is applied are buffered instead of dropped, because
+   * addIceCandidate() rejects them and that silently breaks connectivity on slow
+   * or reordered signaling.
+   *
+   * Exactly one branch applies each candidate: either it is queued (and never
+   * added here), or it is added once here. It is never both.
+   */
+  private handleRemoteCandidate(from: string, candidate: RTCIceCandidateInit | null) {
+    const runtime = this.peerRuntimes.get(from);
+    if (!runtime) {
+      // No peer (teardown, or the offer has not arrived yet): buffering here
+      // would be unbounded, so it is intentionally dropped.
+      logPeerEvent("candidate for unknown peer ignored", from);
+      return;
+    }
+
+    // Case A: nothing to add to yet -> queue, do not add. The queue is drained
+    // in arrival order by flushPendingCandidates() once the description lands.
+    if (!runtime.hasRemoteDescription) {
+      const result = runtime.candidates.push(candidate);
+      if (result === "dropped") {
+        logPeerEvent("candidate buffer full", from, { size: runtime.candidates.size });
+      }
+      return;
+    }
+
+    // Case C/D: the remote description is applied, so the candidate (or the
+    // end-of-candidates marker, null) is added exactly once. A candidate from a
+    // superseded ICE generation is discarded by addRemoteCandidate() against the
+    // currently applied ufrags; queueing it here instead would strand it until
+    // an unrelated renegotiation and could evict live candidates.
+    runtime.candidateChain = runtime.candidateChain
+      .then(() => this.addRemoteCandidate(from, runtime, candidate))
+      .catch((err: unknown) => {
+        logPeerEvent("candidate rejected", from, { error: String(err) });
+      });
+  }
+
+  /** Apply every candidate buffered before the remote description, in order. */
+  private async flushPendingCandidates(remoteSocketId: string, runtime: PeerRuntime) {
+    const { candidates, endOfCandidates } = runtime.candidates.drain();
+    if (candidates.length === 0 && !endOfCandidates) return;
+
+    runtime.candidateChain = runtime.candidateChain
+      .then(async () => {
+        for (const candidate of candidates) {
+          try {
+            await this.addRemoteCandidate(remoteSocketId, runtime, candidate);
+          } catch (err) {
+            logPeerEvent("buffered candidate rejected", remoteSocketId, { error: String(err) });
+          }
+        }
+        if (endOfCandidates) {
+          try {
+            await this.addRemoteCandidate(remoteSocketId, runtime, null);
+          } catch {
+            // End-of-candidates is advisory; ignore a browser that refuses it.
+          }
+        }
+      })
+      .catch(() => {});
+
+    await runtime.candidateChain;
+  }
+
+  /**
+   * Add one remote candidate, skipping candidates that belong to an ICE
+   * generation other than the one currently described (an ICE restart changes
+   * the ufrag, and stale candidates would be rejected by the browser).
+   */
+  private async addRemoteCandidate(
+    remoteSocketId: string,
+    runtime: PeerRuntime,
+    candidate: RTCIceCandidateInit | null,
+  ) {
+    if (candidate === null) {
+      await runtime.pc.addIceCandidate();
+      return;
+    }
+    if (!candidateMatchesUfrags(runtime.remoteUfrags, candidate.usernameFragment)) {
+      logPeerEvent("candidate skipped, other ICE generation", remoteSocketId);
+      return;
+    }
+    await runtime.pc.addIceCandidate(new RTCIceCandidate(candidate));
   }
 
   private removePeer(socketId: string) {
     this.stopPeerStats(socketId);
-    const pc = this.peers.get(socketId);
-    if (pc) {
-      pc.onicecandidate = null;
-      pc.ontrack = null;
-      pc.close();
-      this.peers.delete(socketId);
-    }
+    const runtime = this.peerRuntimes.get(socketId);
+    if (!runtime) return;
+    if (runtime.graceTimer) clearTimeout(runtime.graceTimer);
+    if (runtime.restartTimer) clearTimeout(runtime.restartTimer);
+    runtime.graceTimer = null;
+    runtime.restartTimer = null;
+    runtime.recovery.close();
+    runtime.candidates.clear();
+    const { pc } = runtime;
+    pc.onicecandidate = null;
+    pc.ontrack = null;
+    pc.onconnectionstatechange = null;
+    pc.oniceconnectionstatechange = null;
+    pc.close();
+    this.peerRuntimes.delete(socketId);
   }
 
   private emitParticipantList() {
@@ -1266,20 +1653,20 @@ export class MeetingSession {
     this.socket.off("sign-translation");
     this.socket.off("meeting-ended");
 
-    for (const pc of this.peers.values()) {
-      pc.onicecandidate = null;
-      pc.ontrack = null;
-      pc.close();
+    for (const socketId of [...this.peerRuntimes.keys()]) {
+      this.removePeer(socketId);
     }
     for (const socketId of [...this.statsTimers.keys()]) {
       this.stopPeerStats(socketId);
     }
-    this.peers.clear();
+    this.peerRuntimes.clear();
     this.participantNames.clear();
     this.remoteMediaStates.clear();
     this.activeRemoteByUserId.clear();
     this.userIdByRemoteSocket.clear();
     this.ignoredRemoteSockets.clear();
+    this.joined = false;
+    this.joinedSocketId = null;
 
     if (this.localStream) {
       this.localStream.getTracks().forEach((t) => {
