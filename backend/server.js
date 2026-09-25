@@ -123,18 +123,42 @@ io.on("connection", (socket) => {
     });
 
     // WebRTC signaling
+    // Each handler logs: who sent it, who it's for, and whether the target
+    // socket actually still exists — this is the only way to catch a
+    // signaling event being sent to a stale/disconnected socket ID.
     socket.on("webrtc-offer", ({ offer, to }) => {
         if (!to) return;
+        const targetExists = io.sockets.sockets.has(to);
+        console.log(`[WEBRTC] offer  from=${socket.id} to=${to} meeting=${socket.data.meetingCode || 'unknown'} targetExists=${targetExists}`);
+        if (!targetExists) {
+            console.warn(`[WEBRTC] offer target ${to} does not exist (stale socket) — not forwarded`);
+            return;
+        }
         io.to(to).emit("webrtc-offer", { offer, from: socket.id });
     });
 
     socket.on("webrtc-answer", ({ answer, to }) => {
         if (!to) return;
+        const targetExists = io.sockets.sockets.has(to);
+        console.log(`[WEBRTC] answer from=${socket.id} to=${to} meeting=${socket.data.meetingCode || 'unknown'} targetExists=${targetExists}`);
+        if (!targetExists) {
+            console.warn(`[WEBRTC] answer target ${to} does not exist (stale socket) — not forwarded`);
+            return;
+        }
         io.to(to).emit("webrtc-answer", { answer, from: socket.id });
     });
 
     socket.on("webrtc-ice-candidate", ({ candidate, to }) => {
         if (!to) return;
+        const targetExists = io.sockets.sockets.has(to);
+        // ICE candidates fire frequently — log at a lighter level (no full
+        // payload) to avoid flooding Render's logs, but still capture
+        // enough to count candidates per direction and catch stale targets.
+        console.log(`[WEBRTC] ice from=${socket.id} to=${to} targetExists=${targetExists}`);
+        if (!targetExists) {
+            console.warn(`[WEBRTC] ice target ${to} does not exist (stale socket) — not forwarded`);
+            return;
+        }
         io.to(to).emit("webrtc-ice-candidate", { candidate, from: socket.id });
     });
 
@@ -163,15 +187,16 @@ io.on("connection", (socket) => {
         socket.to(meetingCode).emit("receive-message", data);
     });
 
-    socket.on("disconnect", async () => {
+    socket.on("disconnect", async (reason) => {
         const { meetingCode, userName, userId, meetingId, replacedBy } = socket.data;
-        console.log("User disconnected:", socket.id);
+        console.log(`User disconnected: ${socket.id} reason=${reason} userId=${userId || 'unknown'} meeting=${meetingCode || 'unknown'}`);
 
         // This socket was replaced by a newer connection from the same user
         // (rejoin from another tab/browser) — the user is still present via
         // the new socket, so don't emit user-left or mark them as having
         // left in the DB. Just clean up silently.
         if (replacedBy) {
+            console.log(`Socket ${socket.id} was replaced by ${replacedBy} — skipping user-left broadcast`);
             return;
         }
 
