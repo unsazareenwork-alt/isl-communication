@@ -486,12 +486,17 @@ export class MeetingSession {
       this.emitParticipantList();
     });
 
-    s.on("user-left", (data: { socketId: string; userName: string }) => {
+    s.on("user-left", (data: { socketId?: string; userId?: string; userName?: string }) => {
+      // The REST /api/meetings/leave/:id path emits user-left without a socketId;
+      // fall back to the currently active remote socket for that userId.
+      const socketId =
+        data.socketId ?? (data.userId ? this.activeRemoteByUserId.get(data.userId) : undefined);
+      if (!socketId) return;
       // Guard: if this socket is no longer the active connection for its user,
       // a stale user-left (for a replaced old socket) must not remove the newer one.
-      const userId = this.userIdByRemoteSocket.get(data.socketId);
-      if (userId && this.activeRemoteByUserId.get(userId) !== data.socketId) return;
-      this.takeDownRemote(data.socketId);
+      const userId = this.userIdByRemoteSocket.get(socketId) || data.userId;
+      if (userId && this.activeRemoteByUserId.get(userId) !== socketId) return;
+      this.takeDownRemote(socketId);
     });
 
     s.on("peer-media-toggle", (data: { socketId: string; cameraOn: boolean; micOn: boolean }) => {

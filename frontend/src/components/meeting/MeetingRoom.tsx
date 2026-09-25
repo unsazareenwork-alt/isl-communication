@@ -44,6 +44,7 @@ export function MeetingRoom({ meetingId, meetingCode, isHost, onExited, session 
   const { aiSentence, detectedWord, reset: resetAi } = useSignLanguageAI({
     stream: session.localStream,
     meetingId,
+    token,
     enabled: detectionEnabled && session.cameraEnabled,
   });
 

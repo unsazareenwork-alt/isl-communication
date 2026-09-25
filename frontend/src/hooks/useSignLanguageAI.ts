@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-const FRAME_INTERVAL_MS = 200;
+const FRAME_INTERVAL_MS = 150;
 const FRAME_WIDTH = 640;
 const FRAME_HEIGHT = 480;
 const JPEG_QUALITY = 0.65;
@@ -11,15 +11,21 @@ const AI_WS_URL =
 const MAX_RETRIES = 3;
 const RECONNECT_DELAYS_MS = [2000, 4000, 8000];
 
+function predictionKey(value: string): string {
+  return value.trim().toLowerCase().replace(/[.!?…]+$/g, "");
+}
+
 interface UseSignLanguageAIOptions {
   stream: MediaStream | null;
   meetingId: string;
+  token: string | null;
   enabled: boolean;
 }
 
 export function useSignLanguageAI({
   stream,
   meetingId,
+  token,
   enabled,
 }: UseSignLanguageAIOptions) {
   const wsRef = useRef<WebSocket | null>(null);
@@ -30,23 +36,28 @@ export function useSignLanguageAI({
   const retryCountRef = useRef(0);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const connectionIdRef = useRef(0);
+  const suppressedPredictionRef = useRef<string | null>(null);
 
   const [aiSentence, setAiSentence] = useState("");
   const [detectedWord, setDetectedWord] = useState("");
 
   const reset = useCallback(() => {
+    const shownWord = detectedWord || aiSentence;
+    if (shownWord) {
+      suppressedPredictionRef.current = predictionKey(shownWord);
+    }
     setAiSentence("");
     setDetectedWord("");
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: "reset" }));
     }
-  }, []);
+  }, [aiSentence, detectedWord]);
 
   useEffect(() => {
     visibleRef.current = true;
 
-    if (!enabled || !stream || !meetingId) return;
+    if (!enabled || !stream || !meetingId || !token) return;
 
     const video = document.createElement("video");
     video.setAttribute("playsinline", "");
@@ -134,7 +145,7 @@ export function useSignLanguageAI({
         if (connectionIdRef.current !== currentId) return;
         console.log("[ISL AI] WebSocket opened");
         retryCountRef.current = 0;
-        ws.send(JSON.stringify({ type: "init", meetingId }));
+        ws.send(JSON.stringify({ type: "init", meetingId, token }));
         console.log("[ISL AI] capture interval starting (every", FRAME_INTERVAL_MS, "ms)");
         startCapture();
       };
@@ -143,9 +154,20 @@ export function useSignLanguageAI({
         try {
           const data = JSON.parse(event.data);
           if (data && data.type === "prediction") {
+            const word = data.word || data.prediction || "";
+            const sentence = data.sentence || "";
+            const key = predictionKey(word || sentence);
+            if (
+              key &&
+              suppressedPredictionRef.current &&
+              key === suppressedPredictionRef.current
+            ) {
+              return;
+            }
+            if (word || sentence) suppressedPredictionRef.current = null;
             setAiSentence(data.sentence || "");
             if (data.accepted === true) {
-              setDetectedWord(data.word || data.prediction || "");
+              setDetectedWord(word);
             }
           } else if (data && data.type === "reset") {
             setAiSentence("");
@@ -204,7 +226,7 @@ export function useSignLanguageAI({
       videoRef.current = null;
       canvasRef.current = null;
     };
-  }, [stream, meetingId, enabled]);
+  }, [stream, meetingId, token, enabled]);
 
   return { aiSentence, detectedWord, reset };
 }
